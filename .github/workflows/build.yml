@@ -1,1 +1,100 @@
+name: Build Admiral 1506 (Windows + macOS)
+
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    permissions:
+      contents: write   # nötig, damit bei Tags ein Release angelegt werden kann
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Konfigurieren (CMake, Visual Studio 2022, x64)
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DADMIRAL_BUILD_TESTS=ON -DADMIRAL_BUILD_PLUGIN_TEST=ON
+
+      - name: Bauen (Release)
+        run: cmake --build build --config Release --parallel
+
+      - name: Selbsttest (Generator, Sequencer, Sampler, Plugin-Zustand, MIDI-Export)
+        run: |
+          mkdir test-out
+          build\Release\core_test.exe Resources/Kits test-out
+          build\Release\plugin_test.exe test-out --no-gui
+
+      - name: Paket schnüren
+        shell: pwsh
+        run: |
+          $art = "build/Admiral1506_artefacts/Release"
+          New-Item -ItemType Directory -Force -Path dist/VST3, dist/Standalone | Out-Null
+          Copy-Item "$art/VST3/Admiral 1506.vst3" -Destination dist/VST3 -Recurse
+          Copy-Item "$art/Standalone/Admiral 1506.exe" -Destination dist/Standalone
+          Copy-Item packaging/Install_VST3.bat -Destination dist
+          Copy-Item packaging/Install_Cubase.bat -Destination dist
+          Copy-Item README.md -Destination dist
+          Compress-Archive -Path dist/* -DestinationPath Admiral-1506-Windows-x64.zip
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Admiral-1506-Windows-x64
+          path: Admiral-1506-Windows-x64.zip
+
+      - name: Release erstellen (nur bei Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Admiral-1506-Windows-x64.zip
+
+  macos:
+    runs-on: macos-15-intel
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Konfigurieren (CMake, Universal-Binary arm64 + x86_64)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DADMIRAL_BUILD_TESTS=ON -DADMIRAL_BUILD_PLUGIN_TEST=ON
+
+      - name: Bauen (Release)
+        run: cmake --build build --config Release --parallel 4
+
+      - name: Selbsttest (Generator, Sequencer, Sampler, Plugin-Zustand, MIDI-Export)
+        run: |
+          mkdir test-out
+          build/core_test Resources/Kits test-out
+          build/plugin_test test-out --no-gui
+
+      - name: Paket schnüren (ad-hoc signiert)
+        run: |
+          echo "--- gebaute Plugin-Pakete ---"
+          find build -maxdepth 6 \( -name "*.vst3" -o -name "*.component" -o -name "*.app" \) -not -path "*/CMakeFiles/*" -print
+          VST3=$(find build -maxdepth 6 -name "Admiral 1506.vst3" -not -path "*/CMakeFiles/*" | head -n 1)
+          AU=$(find build -maxdepth 6 -name "Admiral 1506.component" -not -path "*/CMakeFiles/*" | head -n 1)
+          APP=$(find build -maxdepth 6 -name "Admiral 1506.app" -not -path "*/CMakeFiles/*" | head -n 1)
+          echo "VST3=$VST3"; echo "AU=$AU"; echo "APP=$APP"
+          test -n "$VST3" && test -n "$AU" && test -n "$APP"
+          mkdir -p dist/VST3 dist/AU dist/Standalone
+          cp -R "$VST3" dist/VST3/
+          cp -R "$AU" dist/AU/
+          cp -R "$APP" dist/Standalone/
+          for b in "dist/VST3/Admiral 1506.vst3" "dist/AU/Admiral 1506.component" "dist/Standalone/Admiral 1506.app"; do
+            codesign --force --deep --sign - "$b"
+          done
+          cp packaging/Install_macOS.command dist/
+          chmod +x dist/Install_macOS.command
+          cp README.md dist/
+          cd dist && zip -qry ../Admiral-1506-macOS-Universal.zip . && cd ..
+
+      - name: Artefakt hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: Admiral-1506-macOS-Universal
+          path: Admiral-1506-macOS-Universal.zip
+
+      - name: Release-Datei anhängen (nur bei Tag v*)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: Admiral-1506-macOS-Universal.zip
 
