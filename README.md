@@ -62,8 +62,11 @@ Eigene Samples werden im Projekt gespeichert.
 * **Standalone / Host gestoppt:** **INT. RUN** einschalten, Tempo mit **INT. TEMPO**.
 
 ### MIDI
-* **DRAG MIDI TO FL STUDIO** – Fläche anfassen und in die Playlist oder Piano Roll ziehen.
-  Länge (1–16 Takte) im Feld daneben; das Pattern läuft darin fortlaufend in seiner eingestellten Länge, Variationen, Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei.
+* **DRAG MIDI TO FL STUDIO** – Fläche anfassen und in die Piano Roll eines Instruments (z. B. FPC, oder Admiral selbst) oder in die Playlist ziehen.
+  Länge (1, 2, 3, 4, 6, 8, 12 oder 16 Takte) im Feld daneben – 3 / 6 / 12 Takte passen genau zu Pattern mit 48 Schritten; das Pattern läuft darin fortlaufend in seiner eingestellten Länge, Variationen, Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei.
+* **PATTERN PLAY** (MASTER-Bereich) – aus: Admiral spielt sein internes Pattern nicht mehr und ist ein reines Klangmodul,
+  das nur auf MIDI-Noten reagiert. So lässt sich ein exportiertes Pattern in der Piano Roll von Admiral weiterbearbeiten,
+  ohne dass es doppelt spielt. Sounds, Effekte, Kit Designer und GLUE/TAPE bleiben voll wirksam.
 * **MIDI OUT** – Noten (General MIDI, Kanal 10: Kick 36, Snare 38, Clap 39, Hats 42/46, Toms 45/50,
   Rim 37, Cowbell 56, Crash 49) gehen zusätzlich an den MIDI-Ausgang, z. B. für FPC oder Battery.
   FL Studio: im Plugin-Fenster *⚙ › MIDI › Output port* setzen und beim Ziel-Instrument denselben *Input port*.

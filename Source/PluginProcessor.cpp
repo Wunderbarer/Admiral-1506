@@ -218,8 +218,10 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     hostPlaying.store (hostPlay);
 
     const bool run = getValue (GP_RUN) > 0.5f;
+    const bool patternPlay = getValue (GP_PATPLAY) > 0.5f;    // aus: Admiral reagiert nur auf MIDI-Noten
     bool sequencing = false;
-    if (hostPlay) { sequencing = true; wasRunning = false; }
+    if (! patternPlay) { wasRunning = false; }
+    else if (hostPlay) { sequencing = true; wasRunning = false; }
     else if (run)
     {
         if (! wasRunning) { internalPpq = 0.0; wasRunning = true; seq.reset(); }

@@ -7,7 +7,7 @@
 
 //==============================================================================
 // Kleiner Leuchttaster (waagerecht, LED + Text). Für LOCK, MUTE, OUT, RUN ...
-class LedPill : public juce::Component
+class LedPill : public juce::Component, public juce::SettableTooltipClient
 {
 public:
     explicit LedPill (juce::String t, juce::Colour onColour = col::cyan) : text (std::move (t)), colOn (onColour) {}

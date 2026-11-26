@@ -82,6 +82,7 @@ enum GlobalP
     GP_TEMPO, GP_RUN, GP_MIDIOUT, GP_BARS,
     GP_GLUE, GP_TAPE,                                                       // Master-Bus
     GP_LENGTH,                                                              // Pattern-Länge 16/24/32/48
+    GP_PATPLAY,                                                             // internes Pattern spielen (aus = reines Klangmodul)
     NUM_PARAMS
 };
 
@@ -226,10 +227,11 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
         F (GP_TEMPO,     "tempo",     "Internal Tempo", 60.f, 200.f, 120.f, Fmt::Bpm, 1.f);
         T (GP_RUN,       "run",       "Internal Run", false);
         T (GP_MIDIOUT,   "midiout",   "MIDI Out", true);
-        C (GP_BARS,      "bars",      "MIDI Export Bars", { "1 Bar", "2 Bars", "4 Bars", "8 Bars", "16 Bars" }, 2);
+        C (GP_BARS,      "bars",      "MIDI Export Bars", { "1 Bar", "2 Bars", "3 Bars", "4 Bars", "6 Bars", "8 Bars", "12 Bars", "16 Bars" }, 3);
         F (GP_GLUE,      "glue",      "Master Glue", 0.f, 1.f, 0.3f, Fmt::Ten);
         F (GP_TAPE,      "tape",      "Master Tape", 0.f, 1.f, 0.25f, Fmt::Ten);
         C (GP_LENGTH,    "length",    "Pattern Length", { "16 Steps", "24 Steps", "32 Steps", "48 Steps" }, 3);
+        T (GP_PATPLAY,   "patplay",   "Pattern Play", true);
         return a;
     }();
     return table;
@@ -238,5 +240,6 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
 // Fill: jeder 2./4./8. Durchlauf des Patterns
 inline int fillEveryCycles (int choice) { static const int v[] = { 0, 2, 4, 8 }; return v[std::clamp (choice, 0, 3)]; }
 inline int patternLength (int choice) { static const int v[] = { 16, 24, 32, 48 }; return v[std::clamp (choice, 0, 3)]; }
-inline int exportBars (int choice)    { static const int v[] = { 1, 2, 4, 8, 16 }; return v[std::clamp (choice, 0, 4)]; }
+constexpr int NUM_EXPORT_BARS = 8;   // 3 / 6 / 12 Takte passen zu Pattern mit 48 bzw. 24 Schritten
+inline int exportBars (int choice)    { static const int v[] = { 1, 2, 3, 4, 6, 8, 12, 16 }; return v[std::clamp (choice, 0, NUM_EXPORT_BARS - 1)]; }
 } // namespace ad

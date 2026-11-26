@@ -641,12 +641,17 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
 
         knob (GP_GLUE, "GLUE", { kMasterX + 6, kPatY + 120, 63, 64 }, 44);
         knob (GP_TAPE, "TAPE", { kMasterX + 69, kPatY + 120, 63, 64 }, 44);
+        auto* pp = add<ParamPill> (proc, GP_PATPLAY, "PATTERN PLAY", col::yellow);
+        pp->setBounds (kMasterX + 16, kPatY + 212, kMasterW - 32, 24);
+        pp->setTooltip ("Off: Admiral only plays incoming MIDI notes (e.g. the exported pattern in FL's piano roll)");
+        learners.push_back (pp);
+
         auto* mo = add<ParamPill> (proc, GP_MIDIOUT, "MIDI OUT");
-        mo->setBounds (kMasterX + 16, kPatY + 212, kMasterW - 32, 24);
+        mo->setBounds (kMasterX + 16, kPatY + 240, kMasterW - 32, 24);
         learners.push_back (mo);
 
         allOuts = add<LedPill> ("ALL OUTS", col::magenta);
-        allOuts->setBounds (kMasterX + 16, kPatY + 240, kMasterW - 32, 24);
+        allOuts->setBounds (kMasterX + 16, kPatY + 268, kMasterW - 32, 24);
         allOuts->onClick = [this]
         {
             const bool on = ! proc.allOutsOn();
@@ -655,7 +660,7 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         };
 
         auto* f = add<FaderCell> (proc, GP_MASTER, "MASTER", true);
-        f->setBounds (kMasterX + (kMasterW - 70) / 2, kPatY + 270, 70, kPatH - 278);
+        f->setBounds (kMasterX + (kMasterW - 70) / 2, kPatY + 298, 70, kPatH - 306);
         learners.push_back (&f->getSlider());
     }
 
@@ -739,7 +744,7 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
     dragTile = add<MidiDragTile> (proc);
     dragTile->onNotice = [this] (const juce::String& t) { showNotice (t); };
 
-    for (int i = 0; i < 5; ++i)
+    for (int i = 0; i < NUM_EXPORT_BARS; ++i)
         barsBox.addItem (juce::String (exportBars (i)) + (i == 0 ? " BAR" : " BARS"), i + 1);
     barsAtt = std::make_unique<juce::ComboBoxParameterAttachment> (*proc.getParam (GP_BARS), barsBox);
     addAndMakeVisible (barsBox);
@@ -1039,7 +1044,7 @@ void MainPanel::paint (juce::Graphics& g)
         g.setColour (col::iceDim);
         g.setFont (CyberLook::labelFont (10.f));
         const auto bpm = juce::String (proc.getCurrentBpm(), 1) + " BPM";
-        const juce::String src = proc.isHostSynced() ? "HOST SYNC" : (proc.getValue (GP_RUN) > 0.5f ? "INTERNAL RUN" : "STOPPED");
+        const juce::String src = proc.getValue (GP_PATPLAY) < 0.5f ? "MIDI ONLY" : proc.isHostSynced() ? "HOST SYNC" : (proc.getValue (GP_RUN) > 0.5f ? "INTERNAL RUN" : "STOPPED");
         g.drawText (src + "  |  " + bpm, d.withTrimmedTop (38.f).withTrimmedBottom (6.f).toNearestInt(), juce::Justification::centred, false);
     }
 
@@ -1141,7 +1146,8 @@ void MainPanel::updateCaption()
     const int fe = fillEveryCycles ((int) std::lround (proc.getValue (GP_FILL)));
     const juce::String c = which + "  |  " + juce::String (proc.getLength()) + " STEPS  |  " + (fe > 0 ? "FILL EVERY " + juce::String (fe) : juce::String ("FILL OFF"))
                          + "  |  " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (proc.getValue (GP_GENRE)))]).toUpperCase()
-                         + (proc.getKitCharacter().isNotEmpty() ? "  |  KIT: " + proc.getKitCharacter().toUpperCase() : juce::String());
+                         + (proc.getKitCharacter().isNotEmpty() ? "  |  KIT: " + proc.getKitCharacter().toUpperCase() : juce::String())
+                         + (proc.getValue (GP_PATPLAY) < 0.5f ? "  |  PATTERN PLAY OFF" : "");
     if (c != caption) { caption = c; repaint (842, 65, 452, 14); }
 }
 

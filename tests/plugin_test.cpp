@@ -370,21 +370,48 @@ int main (int argc, char** argv)
         check (std::abs (q->getValue (ad::tp (ad::T_SNARE, ad::TP_RV_MIX)) - 0.3f) < 0.01f, "Spur-Effekte nach Laden erhalten");
     }
 
+    // PATTERN PLAY aus: kein internes Pattern, eingehende MIDI-Noten spielen weiter
+    {
+        auto* pp = p->getParam (ad::GP_PATPLAY);
+        pp->setValueNotifyingHost (0.f);
+        auto silent = run (*p, 2);
+        check (silent.rms < 1.0e-4 && silent.noteOns == 0, "PATTERN PLAY aus: Host läuft, internes Pattern schweigt");
+        FakeHost host;
+        p->setPlayHead (&host);
+        p->prepareToPlay (48000.0, 480);
+        juce::AudioBuffer<float> buf (p->getTotalNumOutputChannels(), 480);
+        juce::MidiBuffer midi;
+        midi.addEvent (juce::MidiMessage::noteOn (10, 36, (juce::uint8) 110), 0);
+        midi.addEvent (juce::MidiMessage::noteOn (10, 38, (juce::uint8) 100), 100);
+        double e = 0.0;
+        for (int b = 0; b < 20; ++b)
+        {
+            p->processBlock (buf, midi);
+            midi.clear();
+            for (int i = 0; i < 480; ++i) e += (double) buf.getSample (0, i) * buf.getSample (0, i);
+        }
+        p->setPlayHead (nullptr);
+        check (e > 1.0, "PATTERN PLAY aus: MIDI-Noten (Kick 36, Snare 38) spielen Admiral");
+        pp->setValueNotifyingHost (1.f);
+        check (ad::exportBars (2) == 3 && ad::exportBars (6) == 12, "Export-Längen 3 / 6 / 12 Takte vorhanden");
+    }
+
     // MIDI-Export
     {
         const auto f = out.getChildFile ("export_test.mid");
-        check (p->writeMidiFile (f, 8), "MIDI-Datei geschrieben");
+        p->getParam (ad::GP_LENGTH)->setValueNotifyingHost (1.f);       // 48 Schritte
+        check (p->writeMidiFile (f, 12), "MIDI-Datei geschrieben (12 Takte = 4 Durchläufe à 48)");
         juce::FileInputStream in (f);
         juce::MidiFile mf;
         check (mf.readFrom (in), "MIDI-Datei lesbar");
         int notes = 0;
         if (mf.getNumTracks() > 0)
             for (auto* e : *mf.getTrack (0)) if (e->message.isNoteOn()) ++notes;
-        // erwartete Noten: 8 Takte = 128 Sechzehntel in Durchläufen der eingestellten Länge
+        // erwartete Noten: 12 Takte = 192 Sechzehntel in Durchläufen der eingestellten Länge
         const auto pt = p->getPattern();
         const int len = p->getLength(), every = ad::fillEveryCycles ((int) std::lround (p->getValue (ad::GP_FILL)));
         int expected = 0;
-        for (int n = 0; n < 128; ++n)
+        for (int n = 0; n < 192; ++n)
         {
             const int c = n / len, k = n % len;
             for (int t = 0; t < ad::NUM_TRACKS; ++t)
@@ -394,7 +421,7 @@ int main (int argc, char** argv)
                 if (v > 0.f && p->getValue (ad::tp (t, ad::TP_MUTE)) < 0.5f) ++expected;
             }
         }
-        check (notes == expected, "MIDI-Export: " + juce::String (notes) + " Noten in 8 Takten bei Länge " + juce::String (len) + " (erwartet " + juce::String (expected) + ")");
+        check (notes == expected, "MIDI-Export: " + juce::String (notes) + " Noten in 12 Takten bei Länge " + juce::String (len) + " (erwartet " + juce::String (expected) + ")");
     }
 
     // Oberfläche rendern (mit --no-gui überspringen, z. B. auf Build-Servern ohne Bildschirm)
