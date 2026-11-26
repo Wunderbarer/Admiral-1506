@@ -1,0 +1,204 @@
+// Admiral 1506 - Test des kompletten Plugins (Processor + Oberfläche) ohne DAW:
+// spielt 8 Takte mit simuliertem Host-Transport ab, prüft Audio, MIDI-Ausgabe, Einzelausgänge,
+// Zustand speichern/laden und MIDI-Export und speichert ein Bild der Oberfläche.
+// Aufruf: plugin_test <Ausgabe-Ordner>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+
+namespace
+{
+struct FakeHost : juce::AudioPlayHead
+{
+    double ppq = 0.0, bpm = 124.0;
+    bool playing = true;
+    juce::Optional<PositionInfo> getPosition() const override
+    {
+        PositionInfo i;
+        i.setBpm (bpm);
+        i.setPpqPosition (ppq);
+        i.setIsPlaying (playing);
+        return i;
+    }
+};
+
+int failures = 0;
+void check (bool ok, const juce::String& what)
+{
+    std::printf ("%s  %s\n", ok ? "OK    " : "FEHLER", what.toRawUTF8());
+    if (! ok) ++failures;
+}
+
+struct RunResult { double rms = 0; float peak = 0; bool nan = false; int noteOns = 0; double auxRms = 0; };
+
+RunResult run (AdmiralProcessor& p, int bars, int auxBus = -1)
+{
+    const double sr = 48000.0;
+    const int block = 480;
+    FakeHost host;
+    p.setPlayHead (&host);
+    p.prepareToPlay (sr, block);
+    juce::AudioBuffer<float> buf (p.getTotalNumOutputChannels(), block);
+    juce::MidiBuffer midi;
+    RunResult r;
+    const int blocks = (int) (bars * 4.0 * 60.0 / host.bpm * sr / block);
+    double sum = 0, auxSum = 0; long long cnt = 0;
+    for (int b = 0; b < blocks; ++b)
+    {
+        midi.clear();
+        p.processBlock (buf, midi);
+        for (const auto m : midi) if (m.getMessage().isNoteOn()) ++r.noteOns;
+        for (int i = 0; i < block; ++i)
+        {
+            const float l = buf.getSample (0, i), rr = buf.getSample (1, i);
+            if (! std::isfinite (l) || ! std::isfinite (rr)) r.nan = true;
+            r.peak = std::max ({ r.peak, std::abs (l), std::abs (rr) });
+            sum += (double) l * l; ++cnt;
+            if (auxBus > 0)
+            {
+                auto aux = p.getBusBuffer (buf, false, auxBus);
+                auxSum += (double) aux.getSample (0, i) * aux.getSample (0, i);
+            }
+        }
+        host.ppq += block / (sr * 60.0 / host.bpm);
+    }
+    r.rms = std::sqrt (sum / (double) cnt);
+    r.auxRms = std::sqrt (auxSum / (double) cnt);
+    p.setPlayHead (nullptr);
+    return r;
+}
+} // namespace
+
+int main (int argc, char** argv)
+{
+    juce::ScopedJuceInitialiser_GUI gui;
+    const juce::File out (argc > 1 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]) : juce::File::getCurrentWorkingDirectory());
+    out.createDirectory();
+
+    std::unique_ptr<AdmiralProcessor> p (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
+    check (p != nullptr, "Plugin erzeugt");
+    check (p->getPattern (0).count() > 5, "Start-Pattern vorhanden (" + juce::String (p->getPattern (0).count()) + " Schläge)");
+    check (p->getSampleName (0) == "ANALOG KIT", "Kit-Samples eingebettet (" + p->getSampleName (0) + ")");
+
+    auto r = run (*p, 8);
+    check (! r.nan, "kein NaN");
+    check (r.rms > 0.02, "Ausgang hörbar (RMS " + juce::String (r.rms, 3) + ")");
+    check (r.peak <= 1.0f, "keine Übersteuerung (Spitze " + juce::String (r.peak, 2) + ")");
+    check (r.noteOns > 40, "MIDI-Ausgabe (" + juce::String (r.noteOns) + " Noten)");
+
+    // alle Genres und beide Kits
+    for (int g = 0; g < (int) ad::genreNames().size(); ++g)
+    {
+        p->getParam (ad::GP_GENRE)->setValueNotifyingHost (p->getParam (ad::GP_GENRE)->convertTo0to1 ((float) g));
+        p->getParam (ad::GP_KIT)->setValueNotifyingHost ((float) (g % 2));
+        p->generateNew();
+        p->pollParameters();   // sonst per Timer: Kit-Wechsel übernehmen
+        auto rg = run (*p, 4);
+        check (! rg.nan && rg.rms > 0.02 && rg.peak <= 1.f, juce::String (ad::genreNames()[(size_t) g]) + " / Kit " + juce::String (g % 2)
+               + ": RMS " + juce::String (rg.rms, 3) + ", Spitze " + juce::String (rg.peak, 2));
+    }
+
+    // Verlauf
+    const auto before = p->getPattern (0);
+    p->generateNew();
+    p->historyBack();
+    const auto after = p->getPattern (0);
+    check (std::memcmp (&before, &after, sizeof (ad::Pattern)) == 0, "Verlauf zurück");
+
+    // Einzelausgang: Kick auf eigenen Ausgang
+    {
+        auto layout = p->getBusesLayout();
+        check (layout.outputBuses.size() == 11 && layout.outputBuses.getReference (1) == juce::AudioChannelSet::stereo(),
+               "11 Stereo-Ausgänge standardmäßig aktiv (Main + 10 Spuren)");
+        check (p->setBusesLayout (layout), "Einzelausgang KICK zuschaltbar");
+        p->getParam (ad::tp (ad::T_KICK, ad::TP_OUT))->setValueNotifyingHost (1.f);
+        auto ra = run (*p, 2, 1);
+        check (ra.auxRms > 0.01, "Kick klingt auf eigenem Ausgang (RMS " + juce::String (ra.auxRms, 3) + ")");
+        p->getParam (ad::tp (ad::T_KICK, ad::TP_OUT))->setValueNotifyingHost (0.f);
+    }
+
+    // Effekte je Spur: Snare mit Hall + Delay wird lauter/länger, alle Effekte auf allen Spuren: Rechenzeit
+    {
+        auto setP = [&] (int idx, float plain) { auto* q = p->getParam (idx); q->setValueNotifyingHost (q->convertTo0to1 (plain)); };
+        setP (ad::tp (ad::T_SNARE, ad::TP_OUT), 1.f);              // Snare einzeln messen (Ausgang 3)
+        auto dry = run (*p, 4, 2);
+        setP (ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.6f);
+        setP (ad::tp (ad::T_SNARE, ad::TP_DL_MIX), 0.5f);
+        check (p->trackHasFx (ad::T_SNARE) && ! p->trackHasFx (ad::T_KICK), "FX-Anzeige je Spur");
+        auto wet = run (*p, 4, 2);
+        check (! wet.nan && wet.auxRms > dry.auxRms * 1.15, "Hall/Delay auf der Snare hörbar (RMS Snare-Ausgang " + juce::String (dry.auxRms, 3) + " -> " + juce::String (wet.auxRms, 3) + ")");
+        setP (ad::tp (ad::T_SNARE, ad::TP_OUT), 0.f);
+
+        for (int t = 0; t < ad::NUM_TRACKS; ++t)
+        {
+            setP (ad::tp (t, ad::TP_DS_MIX), 1.f); setP (ad::tp (t, ad::TP_DS_DRIVE), 1.f); setP (ad::tp (t, ad::TP_DS_TYPE), 2.f);
+            setP (ad::tp (t, ad::TP_DL_MIX), 1.f); setP (ad::tp (t, ad::TP_DL_FB), 0.9f); setP (ad::tp (t, ad::TP_DL_DIV), 8.f);
+            setP (ad::tp (t, ad::TP_RV_MIX), 1.f); setP (ad::tp (t, ad::TP_RV_SIZE), 1.f);
+        }
+        const double t0 = juce::Time::getMillisecondCounterHiRes();
+        auto full = run (*p, 8);
+        const double ms = juce::Time::getMillisecondCounterHiRes() - t0;
+        const double audioMs = 8 * 4 * 60000.0 / 124.0;
+        check (! full.nan && full.peak <= 1.0f, "alle Effekte auf allen Spuren voll aufgedreht: stabil (Spitze " + juce::String (full.peak, 2) + ")");
+        check (ms < audioMs, "Rechenzeit mit 30 Effekten: " + juce::String (100.0 * ms / audioMs, 1) + " % eines CPU-Kerns");
+        for (int t = 0; t < ad::NUM_TRACKS; ++t)
+            for (int q = ad::TP_DS_TYPE; q <= ad::TP_RV_MIX; ++q)
+                p->getParam (ad::tp (t, q))->setValueNotifyingHost (p->getParam (ad::tp (t, q))->getDefaultValue());
+        setP (ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.3f);
+        p->setAllOuts (true);
+        check (p->allOutsOn(), "ALL OUTS schaltet alle Spuren um");
+        p->setAllOuts (false);
+    }
+
+    // Zustand speichern / laden (inkl. eigenem Sample und Sperre)
+    {
+        p->setLocked (3, true);
+        p->setStep (1, 2, 5, 0.42f);
+        juce::MemoryBlock mb;
+        p->getStateInformation (mb);
+        std::unique_ptr<AdmiralProcessor> q (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
+        q->setStateInformation (mb.getData(), (int) mb.getSize());
+        bool same = true;
+        for (int w = 0; w < 2; ++w)
+            for (int t = 0; t < ad::NUM_TRACKS; ++t)
+                for (int k = 0; k < ad::NUM_STEPS; ++k)
+                    if (std::abs (p->getStep (w, t, k) - q->getStep (w, t, k)) > 0.002f) same = false;
+        check (same, "Pattern nach Laden identisch");
+        check (q->isLocked (3) && ! q->isLocked (2), "Sperren nach Laden erhalten");
+        check (std::abs (q->getValue (ad::GP_GENRE) - p->getValue (ad::GP_GENRE)) < 0.01f, "Parameter nach Laden erhalten");
+        check (std::abs (q->getValue (ad::tp (ad::T_SNARE, ad::TP_RV_MIX)) - 0.3f) < 0.01f, "Spur-Effekte nach Laden erhalten");
+    }
+
+    // MIDI-Export
+    {
+        const auto f = out.getChildFile ("export_test.mid");
+        check (p->writeMidiFile (f, 8), "MIDI-Datei geschrieben");
+        juce::FileInputStream in (f);
+        juce::MidiFile mf;
+        check (mf.readFrom (in), "MIDI-Datei lesbar");
+        int notes = 0;
+        if (mf.getNumTracks() > 0)
+            for (auto* e : *mf.getTrack (0)) if (e->message.isNoteOn()) ++notes;
+        const auto m = p->getPattern (0).count(), fl = p->getPattern (1).count();
+        check (notes >= m * 6 + fl * 2, "MIDI-Export: " + juce::String (notes) + " Noten in 8 Takten");
+    }
+
+    // Oberfläche rendern (mit --no-gui überspringen, z. B. auf Build-Servern ohne Bildschirm)
+    if (! (argc > 2 && juce::String (argv[2]) == "--no-gui"))
+    {
+        std::unique_ptr<juce::AudioProcessorEditor> ed (p->createEditor());
+        ed->setSize (MainPanel::W, MainPanel::H);
+        auto img = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        const auto f = out.getChildFile ("admiral_ui.png");
+        f.deleteFile();
+        juce::FileOutputStream os (f);
+        juce::PNGImageFormat png;
+        check (png.writeImageToStream (img, os), "Oberfläche gerendert: " + f.getFullPathName());
+    }
+
+    std::printf ("\n%s (%d Fehler)\n", failures == 0 ? "ALLE PLUGIN-TESTS BESTANDEN" : "PLUGIN-TESTS FEHLGESCHLAGEN", failures);
+    return failures == 0 ? 0 : 1;
+}

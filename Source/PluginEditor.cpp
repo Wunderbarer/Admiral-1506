@@ -1,0 +1,959 @@
+#include "PluginEditor.h"
+
+using namespace ad;
+using juce::Rectangle;
+
+namespace
+{
+// Layout (Entwurfskoordinaten 1320 x 784, wird als Ganzes skaliert)
+constexpr int kPatX = 20, kPatY = 92, kPatW = 1132, kPatH = 504;          // Bereich PATTERN
+constexpr int kHeadX = 32, kHeadW = 152;                                   // Spurköpfe
+constexpr int kGridX = 192, kGridY = 122;                                  // Schrittraster (inkl. Kopfzeile)
+constexpr int kRowsY = kGridY + StepMatrix::kHeader;                       // erste Spur
+constexpr int kKnobX = 894, kKnobW = 48, kKnobSize = 40;                   // Regler je Spur: TUNE DECAY PAN LEVEL
+constexpr int kOutX = kKnobX + 4 * kKnobW + 6;                             // OUT-Taster
+constexpr int kMasterX = 1162, kMasterW = 138;                             // Bereich MASTER
+constexpr int kFxY = 606, kFxH = 142;                                      // TRACK FX
+constexpr int kGenY = 758, kGenH = 142;                                    // GENERATOR / GROOVE
+constexpr int kFootY = 906;
+
+// ---- Zeichenhilfen wie im Diplomat ----
+void drawSide (juce::Graphics& g, Rectangle<int> r, bool leftSide)
+{
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff12142b), (float) r.getX(), 0.f,
+                                             juce::Colour (0xff05060d), (float) r.getRight(), 0.f, false));
+    g.fillRect (r);
+    const int ex = leftSide ? r.getRight() - 2 : r.getX();
+    g.setColour (col::cyan.withAlpha (0.18f)); g.fillRect (ex - (leftSide ? 2 : -2), r.getY(), 4, r.getHeight());
+    g.setColour (col::cyan.withAlpha (0.9f));  g.fillRect (ex, r.getY(), 2, r.getHeight());
+    g.setColour (col::magenta.withAlpha (0.8f));
+    for (int y = 40; y < r.getHeight(); y += 140) g.fillRect (r.getX() + 4, y, r.getWidth() - 8, 2);
+}
+
+void drawPanel (juce::Graphics& g, Rectangle<int> r, const juce::String& title)
+{
+    const auto rf = r.toFloat();
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff10132a), rf.getX(), rf.getY(),
+                                             juce::Colour (0xff080a17), rf.getX(), rf.getBottom(), false));
+    g.fillRoundedRectangle (rf, 6.f);
+    g.setColour (col::edge);
+    g.drawRoundedRectangle (rf.reduced (0.5f), 6.f, 1.f);
+    g.setColour (col::cyan.withAlpha (0.75f));
+    g.fillRect (rf.getRight() - 40.f, rf.getY() + 0.5f, 38.f, 1.5f);
+    g.fillRect (rf.getRight() - 1.5f, rf.getY() + 2.f, 1.f, 14.f);
+
+    if (title.isNotEmpty())
+    {
+        const auto bar = Rectangle<float> (rf.getX() + 1.f, rf.getY() + 1.f, rf.getWidth() - 2.f, 24.f);
+        g.setGradientFill (juce::ColourGradient (juce::Colour (0xff1b1f45), bar.getX(), 0.f, juce::Colour (0xff0a0b1a), bar.getRight(), 0.f, false));
+        g.fillRoundedRectangle (bar, 5.f);
+        g.setColour (col::cyan.withAlpha (0.25f)); g.fillRect (bar.getX() + 10.f, bar.getBottom() - 4.f, 34.f, 5.f);
+        g.setColour (col::cyan);    g.fillRect (bar.getX() + 10.f, bar.getBottom() - 3.f, 34.f, 2.f);
+        g.setColour (col::magenta); g.fillRect (bar.getX() + 46.f, bar.getBottom() - 3.f, 20.f, 2.f);
+        g.setColour (col::violet);  g.fillRect (bar.getX() + 68.f, bar.getBottom() - 3.f, 10.f, 2.f);
+        g.setColour (col::ice);
+        g.setFont (CyberLook::labelFont (13.f));
+        if (bar.getWidth() < 200.f)   // schmaler Bereich: Titel rechtsbündig, damit er nicht abgeschnitten wird
+            g.drawText (title, (int) bar.getX() + 10, (int) bar.getY(), (int) bar.getWidth() - 18, 22, juce::Justification::centredRight, false);
+        else
+            g.drawText (title, (int) bar.getX() + 90, (int) bar.getY(), (int) bar.getWidth() - 100, 22, juce::Justification::centredLeft, false);
+    }
+}
+
+void drawGroupLabel (juce::Graphics& g, int x, int y, int w, const juce::String& text)
+{
+    g.setColour (col::ice);
+    g.setFont (CyberLook::labelFont (10.f));
+    g.drawText (text, x, y, w, 14, juce::Justification::centredLeft, false);
+    g.setColour (col::cyan);    g.fillRect (x, y + 16, 22, 2);
+    g.setColour (col::magenta); g.fillRect (x + 24, y + 16, 12, 2);
+    g.setColour (col::violet);  g.fillRect (x + 38, y + 16, 6, 2);
+}
+
+void drawColumnLabel (juce::Graphics& g, int x, int y, int w, const juce::String& text)
+{
+    g.setColour (col::ice);
+    g.setFont (CyberLook::labelFont (10.f));
+    g.drawText (text, x, y, w, 14, juce::Justification::centred, false);
+    const int cx = x + w / 2;
+    g.setColour (col::cyan);    g.fillRect (cx - 12, y + 15, 12, 2);
+    g.setColour (col::magenta); g.fillRect (cx + 1, y + 15, 7, 2);
+    g.setColour (col::violet);  g.fillRect (cx + 9, y + 15, 3, 2);
+}
+} // namespace
+
+//==============================================================================
+void LedPill::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.5f);
+    if (on) glowRect (g, r, colOn, 3.f, 0.6f);
+    g.setGradientFill (juce::ColourGradient (on ? colOn.withAlpha (0.28f).overlaidWith (juce::Colour (0x40101830)) : juce::Colour (0xff1a1e3c),
+                                             r.getX(), r.getY(), juce::Colour (0xff090a18), r.getX(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, 3.f);
+    g.setColour (on ? colOn : col::edge);
+    g.drawRoundedRectangle (r.reduced (0.5f), 3.f, on ? 1.3f : 1.f);
+
+    const float d = juce::jmin (7.f, r.getHeight() - 8.f);
+    const auto led = Rectangle<float> (r.getX() + 6.f, r.getCentreY() - d * 0.5f, d, d);
+    if (on) glowEllipse (g, led, colOn);
+    g.setColour (on ? colOn.brighter (0.4f) : juce::Colour (0xff1a2744));
+    g.fillEllipse (led);
+
+    g.setColour (on ? col::ice : col::iceDim);
+    g.setFont (CyberLook::labelFont (9.5f));
+    g.drawText (text, (int) led.getRight() + 3, (int) r.getY(), (int) (r.getRight() - led.getRight()) - 5, (int) r.getHeight(),
+                juce::Justification::centred, false);
+}
+
+void LedPill::paintLearn (juce::Graphics& g, bool learn)
+{
+    if (! learn) return;
+    g.setColour (col::yellow);
+    g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (0.5f), 4.f, 2.f);
+}
+
+ParamPill::ParamPill (AdmiralProcessor& p, int idx, juce::String t, juce::Colour onColour)
+    : LedPill (std::move (t), onColour), LearnWidget (p, idx, *this),
+      attach (*p.getParam (idx), [this] (float v) { setOn (v > 0.5f); }, nullptr)
+{
+    attach.sendInitialUpdate();
+}
+
+void ParamPill::mouseDown (const juce::MouseEvent& e)
+{
+    if (handleLearnClick (e)) return;
+    attach.setValueAsCompleteGesture (on ? 0.f : 1.f);
+}
+
+//==============================================================================
+void StepMatrix::update()
+{
+    const int ps = proc.getPlayStep();
+    const bool pf = proc.isPlayingFill();
+    const int rev = proc.getPatternRevision();
+    int mask = 0;
+    for (int t = 0; t < NUM_TRACKS; ++t) if (proc.getValue (tp (t, TP_MUTE)) > 0.5f) mask |= 1 << t;
+    if (ps != playing || pf != playingFill || rev != seenRevision || mask != muteMask)
+    {
+        playing = ps; playingFill = pf; seenRevision = rev; muteMask = mask;
+        repaint();
+    }
+}
+
+void StepMatrix::paint (juce::Graphics& g)
+{
+    const bool fillView = target == 1;
+    auto colourFor = [&] (float v) { return fillView ? col::accent (v) : col::value (v); };
+
+    // Kopfzeile: Schrittnummern, Zählzeiten hervorgehoben
+    for (int k = 0; k < NUM_STEPS; ++k)
+    {
+        const bool beat = k % 4 == 0;
+        const bool now = k == playing && playingFill == fillView;
+        g.setColour (now ? col::yellow : beat ? col::ice : col::iceDim);
+        g.setFont (CyberLook::labelFont (beat ? 11.f : 10.f));
+        g.drawText (juce::String (k + 1), colX (k), 0, kCellW, kHeader - 4, juce::Justification::centred, false);
+    }
+
+    for (int t = 0; t < NUM_TRACKS; ++t)
+    {
+        const bool muted = proc.getValue (tp (t, TP_MUTE)) > 0.5f;
+        for (int k = 0; k < NUM_STEPS; ++k)
+        {
+            const auto cell = Rectangle<float> ((float) colX (k) + 1.f, (float) (kHeader + t * kRowH) + 3.f, (float) kCellW, (float) kRowH - 6.f);
+            const float v = proc.getStep (target, t, k);
+            const bool now = k == playing && playingFill == fillView;
+            const bool group = (k / 4) % 2 == 0;
+
+            g.setColour (group ? juce::Colour (0xff0b0d1e) : juce::Colour (0xff0e1126));
+            g.fillRoundedRectangle (cell, 4.f);
+
+            if (v > 0.f)
+            {
+                const auto c = colourFor (0.2f + 0.8f * v).withMultipliedAlpha (muted ? 0.35f : 1.f);
+                glowRect (g, cell.reduced (2.f), c, 3.f, (muted ? 0.2f : 0.5f) + 0.5f * v);
+                g.setGradientFill (juce::ColourGradient (c, cell.getX(), cell.getY(), c.darker (0.6f), cell.getX(), cell.getBottom(), false));
+                g.fillRoundedRectangle (cell.reduced (2.f), 3.f);
+                // Anschlagstärke: dunkler Balken von oben, je leiser desto länger
+                const float h = (cell.getHeight() - 8.f) * (1.f - v);
+                if (h > 0.5f)
+                {
+                    g.setColour (juce::Colours::black.withAlpha (0.45f));
+                    g.fillRoundedRectangle (cell.getX() + 4.f, cell.getY() + 4.f, cell.getWidth() - 8.f, h, 2.f);
+                }
+            }
+            g.setColour (now ? col::yellow : (k % 4 == 0 ? col::edge.brighter (0.4f) : col::edge.withAlpha (0.8f)));
+            g.drawRoundedRectangle (cell.reduced (0.5f), 4.f, now ? 2.f : 1.f);
+        }
+    }
+}
+
+bool StepMatrix::cellAt (juce::Point<int> p, int& track, int& step) const
+{
+    if (p.y < kHeader) return false;
+    track = (p.y - kHeader) / kRowH;
+    if (! juce::isPositiveAndBelow (track, NUM_TRACKS)) return false;
+    for (int k = 0; k < NUM_STEPS; ++k)
+        if (p.x >= colX (k) && p.x < colX (k) + kPitch) { step = k; return true; }
+    return false;
+}
+
+void StepMatrix::mouseDown (const juce::MouseEvent& e)
+{
+    int t = 0, k = 0;
+    if (! cellAt (e.getPosition(), t, k)) return;
+    if (e.mods.isPopupMenu()) { showVelocityMenu (t, k); return; }
+    const float v = proc.getStep (target, t, k);
+    if (e.mods.isShiftDown()) paintValue = v >= 0.99f ? 0.8f : 1.f;       // Shift: Betonung umschalten
+    else paintValue = v > 0.f ? 0.f : 0.8f;
+    proc.setStep (target, t, k, paintValue);
+    if (paintValue > 0.f) proc.previewTrack (t);
+    lastPaintT = t; lastPaintK = k;
+}
+
+void StepMatrix::mouseDrag (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu()) return;
+    int t = 0, k = 0;
+    if (! cellAt (e.getPosition(), t, k) || (t == lastPaintT && k == lastPaintK)) return;
+    lastPaintT = t; lastPaintK = k;
+    proc.setStep (target, t, k, paintValue);
+}
+
+void StepMatrix::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& w)
+{
+    int t = 0, k = 0;
+    if (! cellAt (e.getPosition(), t, k)) return;
+    const float v = proc.getStep (target, t, k);
+    if (v <= 0.f) return;
+    proc.setStep (target, t, k, juce::jlimit (0.05f, 1.f, v + (w.deltaY > 0 ? 0.05f : -0.05f)));
+}
+
+void StepMatrix::showVelocityMenu (int t, int k)
+{
+    juce::PopupMenu m;
+    m.addSectionHeader (juce::String (tracks()[(size_t) t].name) + "  STEP " + juce::String (k + 1));
+    m.addItem (1, "Accent (100 %)");
+    m.addItem (2, "Normal (80 %)");
+    m.addItem (3, "Soft (55 %)");
+    m.addItem (4, "Ghost (35 %)");
+    m.addItem (5, "Off");
+    juce::Component::SafePointer<StepMatrix> sp (this);
+    m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this).withMousePosition(), [sp, t, k] (int r)
+    {
+        if (sp == nullptr || r == 0) return;
+        static const float vals[] = { 0.f, 1.f, 0.8f, 0.55f, 0.35f, 0.f };
+        sp->proc.setStep (sp->target, t, k, vals[r]);
+    });
+}
+
+//==============================================================================
+TrackHeader::TrackHeader (AdmiralProcessor& p, int t, std::function<void (int)> onLoadRequest)
+    : proc (p), track (t), requestLoad (std::move (onLoadRequest)),
+      mute (p, tp (t, TP_MUTE), "MUTE", col::magenta)
+{
+    lock.setOn (proc.isLocked (track));
+    lock.onClick = [this] { proc.setLocked (track, ! proc.isLocked (track)); lock.setOn (proc.isLocked (track)); };
+    addAndMakeVisible (lock);
+    addAndMakeVisible (mute);
+    sampleName = proc.getSampleName (track);
+}
+
+void TrackHeader::resized()
+{
+    lock.setBounds (getWidth() - 52, 2, 52, 19);
+    mute.setBounds (getWidth() - 52, 23, 52, 19);
+}
+
+void TrackHeader::update()
+{
+    const float m = proc.takeMeter (track);
+    const float nl = juce::jmax (m > 0.001f ? 1.f : 0.f, led * 0.82f);
+    if (std::abs (nl - led) > 0.01f) { led = nl < 0.02f ? 0.f : nl; repaint (0, 0, 24, getHeight()); }
+    lock.setOn (proc.isLocked (track));
+    const auto sn = proc.getSampleName (track);
+    const bool mu = proc.getValue (tp (track, TP_MUTE)) > 0.5f;
+    const bool fxOn = proc.trackHasFx (track);
+    if (sn != sampleName || mu != shownMute || fxOn != shownFx) { sampleName = sn; shownMute = mu; shownFx = fxOn; repaint(); }
+}
+
+void TrackHeader::paint (juce::Graphics& g)
+{
+    auto r = getLocalBounds().toFloat().reduced (0.5f, 3.f);
+    g.setColour (dropHi ? col::cyan.withAlpha (0.18f) : selected ? juce::Colour (0xff15204a) : juce::Colours::black.withAlpha (0.25f));
+    g.fillRoundedRectangle (r, 4.f);
+    if (selected) glowRect (g, r, col::cyan, 4.f, 0.35f);
+    g.setColour (dropHi || selected ? col::cyan : col::edge.withAlpha (0.7f));
+    g.drawRoundedRectangle (r, 4.f, dropHi || selected ? 1.6f : 1.f);
+
+    // Aktivitäts-LED (leuchtet beim Anschlag auf)
+    const auto ledR = Rectangle<float> (8.f, 10.f, 8.f, 8.f);
+    if (led > 0.f) glowEllipse (g, ledR, col::cyan, led);
+    g.setColour (col::mix (juce::Colour (0xff1a2744), col::cyan.brighter (0.4f), led));
+    g.fillEllipse (ledR);
+
+    const bool muted = proc.getValue (tp (track, TP_MUTE)) > 0.5f;
+    g.setColour (muted ? col::iceDim : col::ice);
+    g.setFont (CyberLook::labelFont (12.5f));
+    g.drawText (tracks()[(size_t) track].name, 21, 4, getWidth() - 100, 18, juce::Justification::centredLeft, false);
+
+    if (shownFx)   // Spur hat aktive Effekte
+    {
+        const Rectangle<float> b ((float) getWidth() - 78.f, 7.f, 20.f, 12.f);
+        g.setColour (col::magenta.withAlpha (0.25f));
+        g.fillRoundedRectangle (b, 2.f);
+        g.setColour (col::magenta);
+        g.drawRoundedRectangle (b, 2.f, 1.f);
+        g.setFont (CyberLook::labelFont (8.f));
+        g.drawText ("FX", b.toNearestInt(), juce::Justification::centred, false);
+    }
+
+    g.setColour (proc.hasUserSample (track) ? col::magenta : col::iceDim);
+    g.setFont (CyberLook::labelFont (8.5f, false));
+    g.drawFittedText (sampleName.toUpperCase(), 21, 22, getWidth() - 78, 14, juce::Justification::centredLeft, 1, 0.75f);
+}
+
+void TrackHeader::mouseDown (const juce::MouseEvent& e)
+{
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        m.addSectionHeader (tracks()[(size_t) track].name);
+        m.addItem (1, "Preview");
+        m.addItem (2, "Load sample ...");
+        m.addItem (3, "Reset to kit sound", proc.hasUserSample (track));
+        m.addSeparator();
+        m.addItem (4, proc.isLocked (track) ? "Unlock track" : "Lock track (keep when generating)");
+        juce::Component::SafePointer<TrackHeader> sp (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [sp] (int r)
+        {
+            if (sp == nullptr) return;
+            if (r == 1) sp->proc.previewTrack (sp->track);
+            else if (r == 2 && sp->requestLoad) sp->requestLoad (sp->track);
+            else if (r == 3) sp->proc.resetSample (sp->track);
+            else if (r == 4) sp->proc.setLocked (sp->track, ! sp->proc.isLocked (sp->track));
+            sp->update();
+        });
+        return;
+    }
+    if (onSelect) onSelect (track);
+    if (e.getNumberOfClicks() > 1) { if (requestLoad) requestLoad (track); return; }
+    proc.previewTrack (track);
+}
+
+//==============================================================================
+void TrackSelectButton::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.5f);
+    if (selected) glowRect (g, r, col::cyan, 3.f, 0.6f);
+    g.setGradientFill (juce::ColourGradient (selected ? juce::Colour (0xff1f3a5e) : juce::Colour (0xff1a1e3c), r.getX(), r.getY(),
+                                             juce::Colour (0xff090a18), r.getX(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, 3.f);
+    g.setColour (selected ? col::cyan : col::edge);
+    g.drawRoundedRectangle (r.reduced (0.5f), 3.f, selected ? 1.4f : 1.f);
+
+    const auto led = Rectangle<float> (r.getX() + 5.f, r.getCentreY() - 3.f, 6.f, 6.f);
+    if (fx) glowEllipse (g, led, col::magenta);
+    g.setColour (fx ? col::magenta.brighter (0.3f) : juce::Colour (0xff1a2744));
+    g.fillEllipse (led);
+
+    g.setColour (selected ? col::ice : col::iceDim);
+    g.setFont (CyberLook::labelFont (8.5f));
+    g.drawFittedText (tracks()[(size_t) track].name, (int) led.getRight() + 2, (int) r.getY(), (int) (r.getRight() - led.getRight()) - 3,
+                      (int) r.getHeight(), juce::Justification::centred, 1, 0.7f);
+}
+
+//==============================================================================
+void MidiDragTile::paint (juce::Graphics& g)
+{
+    const auto r = getLocalBounds().toFloat().reduced (1.f);
+    const auto c = dragging ? col::yellow : col::magenta;
+    glowRect (g, r, c, 5.f, hover ? 0.9f : 0.5f);
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff2a1440), r.getX(), r.getY(), juce::Colour (0xff0a0816), r.getX(), r.getBottom(), false));
+    g.fillRoundedRectangle (r, 5.f);
+    g.setColour (c);
+    g.drawRoundedRectangle (r.reduced (0.5f), 5.f, 1.5f);
+
+    // kleines Noten-Symbol: drei Balken
+    const float x0 = r.getX() + 12.f, cy = r.getCentreY();
+    for (int i = 0; i < 3; ++i)
+    {
+        g.setColour (i == 1 ? col::cyan : col::magenta.brighter (0.3f));
+        g.fillRoundedRectangle (x0 + (float) i * 7.f, cy - 6.f + (float) (i % 2) * 4.f, 5.f, 8.f - (float) (i % 2) * 4.f + 4.f, 1.5f);
+    }
+    g.setColour (col::ice);
+    g.setFont (CyberLook::labelFont (12.f));
+    g.drawText ("DRAG MIDI TO FL STUDIO", (int) x0 + 26, (int) r.getY(), (int) r.getWidth() - 44, (int) r.getHeight(), juce::Justification::centredLeft, false);
+}
+
+void MidiDragTile::mouseDrag (const juce::MouseEvent& e)
+{
+    if (dragging || e.getDistanceFromDragStart() < 6) return;
+    const int bars = exportBars ((int) std::lround (proc.getValue (GP_BARS)));
+    const auto f = proc.createMidiExportFile (bars);
+    if (! f.existsAsFile())
+    {
+        if (onNotice) onNotice ("MIDI EXPORT FAILED");
+        return;
+    }
+    dragging = true;
+    repaint();
+    juce::Component::SafePointer<MidiDragTile> sp (this);
+    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this, [sp]
+    {
+        if (sp == nullptr) return;
+        sp->dragging = false;
+        sp->repaint();
+    });
+    if (onNotice) onNotice ("MIDI: " + juce::String (bars) + (bars == 1 ? " BAR" : " BARS") + "  >  DROP INTO PLAYLIST OR PIANO ROLL");
+}
+
+//==============================================================================
+KnobCell* MainPanel::knob (int paramIdx, const juce::String& label, Rectangle<int> b, int knobSize, int labelH)
+{
+    auto* k = add<KnobCell> (proc, paramIdx, label, knobSize, labelH);
+    k->setBounds (b);
+    learners.push_back (&k->getSlider());
+    return k;
+}
+
+MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
+{
+    setLookAndFeel (&look);
+
+    // ---- Bereich PATTERN ----
+    groups.push_back ({ "PATTERN", { kPatX, kPatY, kPatW, kPatH } });
+    matrix = add<StepMatrix> (proc);
+    matrix->setBounds (kGridX, kGridY, StepMatrix::width(), StepMatrix::height());
+
+    for (int t = 0; t < NUM_TRACKS; ++t)
+    {
+        const int y = kRowsY + t * StepMatrix::kRowH;
+        auto* h = add<TrackHeader> (proc, t, [this] (int tr) { startLoadSample (tr); });
+        h->onSelect = [this] (int tr) { selectTrack (tr); };
+        h->setBounds (kHeadX, y, kHeadW, StepMatrix::kRowH);
+        learners.push_back (&h->getMute());
+        headers[(size_t) t] = h;
+
+        const int ky = y + (StepMatrix::kRowH - kKnobSize) / 2;
+        const int ids[4] = { TP_TUNE, TP_DECAY, TP_PAN, TP_LEVEL };
+        for (int i = 0; i < 4; ++i)
+        {
+            auto* k = knob (tp (t, ids[i]), "", { kKnobX + i * kKnobW, ky, kKnobW, kKnobSize }, kKnobSize, 0);
+            if (ids[i] == TP_LEVEL) k->getSlider().getProperties().set ("accent", true);
+            if (ids[i] == TP_TUNE || ids[i] == TP_PAN) k->getSlider().setDoubleClickReturnValue (true, 0.0);
+        }
+        auto* out = add<ParamPill> (proc, tp (t, TP_OUT), "OUT");
+        out->setBounds (kOutX, y + 11, 52, 22);
+        learners.push_back (out);
+    }
+
+    // ---- Bereich MASTER ----
+    groups.push_back ({ "MASTER", { kMasterX, kPatY, kMasterW, kPatH } });
+    {
+        juce::StringArray kitItems;
+        for (auto& k : kitNames()) kitItems.add (juce::String (k));
+        auto* kit = add<ChoiceButtons> (proc, GP_KIT, kitItems, "KIT");
+        kit->setBounds (kMasterX + 12, kPatY + 34, kMasterW - 24, kit->preferredHeight());
+        learners.push_back (kit);
+
+        knob (GP_TEMPO, "INT. TEMPO", { kMasterX + 10, kPatY + 116, kMasterW - 20, 84 }, 58);
+
+        auto* run = add<ParamPill> (proc, GP_RUN, "INT. RUN");
+        run->setBounds (kMasterX + 16, kPatY + 206, kMasterW - 32, 24);
+        learners.push_back (run);
+        auto* mo = add<ParamPill> (proc, GP_MIDIOUT, "MIDI OUT");
+        mo->setBounds (kMasterX + 16, kPatY + 236, kMasterW - 32, 24);
+        learners.push_back (mo);
+
+        allOuts = add<LedPill> ("ALL OUTS", col::magenta);
+        allOuts->setBounds (kMasterX + 16, kPatY + 266, kMasterW - 32, 24);
+        allOuts->onClick = [this]
+        {
+            const bool on = ! proc.allOutsOn();
+            proc.setAllOuts (on);
+            showNotice (on ? "ALL TRACKS ON SEPARATE OUTPUTS (KICK, SNARE ...)" : "ALL TRACKS ON MAIN OUTPUT");
+        };
+
+        auto* f = add<FaderCell> (proc, GP_MASTER, "MASTER", true);
+        f->setBounds (kMasterX + (kMasterW - 70) / 2, kPatY + 298, 70, kPatH - 306);
+        learners.push_back (&f->getSlider());
+    }
+
+    // ---- Bereich TRACK FX ----
+    buildTrackFx();
+
+    // ---- Bereich GENERATOR ----
+    groups.push_back ({ "GENERATOR", { kPatX, kGenY, 830, kGenH } });
+    {
+        for (int i = 0; i < (int) genreNames().size(); ++i) genreBox.addItem (juce::String (genreNames()[(size_t) i]).toUpperCase(), i + 1);
+        genreAtt = std::make_unique<juce::ComboBoxParameterAttachment> (*proc.getParam (GP_GENRE), genreBox);
+        addAndMakeVisible (genreBox);
+        genreBox.setBounds (36, kGenY + 34, 214, 30);
+
+        generateBtn.getProperties().set ("fontSize", 20.0);
+        generateBtn.setClickingTogglesState (false);
+        generateBtn.setColour (juce::TextButton::buttonColourId, col::panelHi);
+        generateBtn.onClick = [this] { proc.generateNew(); showNotice ("NEW PATTERN: " + genreBox.getText()); };
+        addAndMakeVisible (generateBtn);
+        generateBtn.setBounds (36, kGenY + 72, 214, 58);
+
+        histBack.onClick = [this] { proc.historyBack(); };
+        histFwd.onClick  = [this] { proc.historyForward(); };
+        histBack.setTooltip ("Previous generated pattern");
+        histFwd.setTooltip ("Next generated pattern");
+        addAndMakeVisible (histBack);
+        addAndMakeVisible (histFwd);
+        histBack.setBounds (262, kGenY + 34, 40, 30);
+        histFwd.setBounds (306, kGenY + 34, 40, 30);
+
+        newFillBtn.onClick = [this] { proc.regenerateFill(); setEditTarget (1); showNotice ("NEW FILL BAR"); };
+        addAndMakeVisible (newFillBtn);
+        newFillBtn.setBounds (262, kGenY + 100, 84, 30);
+
+        knob (GP_DENSITY, "DENSITY", { 360, kGenY + 30, 96, 104 }, 66);
+        knob (GP_VARIATION, "VARIATION", { 462, kGenY + 30, 96, 104 }, 66);
+
+        auto* fill = add<ChoiceButtons> (proc, GP_FILL, juce::StringArray { "Off", "4 Bars", "8 Bars", "16 Bars" }, "FILL EVERY");
+        fill->setBounds (576, kGenY + 32, 110, fill->preferredHeight());
+        learners.push_back (fill);
+    }
+
+    // ---- Bereich GROOVE ----
+    groups.push_back ({ "GROOVE", { 862, kGenY, 438, kGenH } });
+    knob (GP_SWING, "SWING", { 878, kGenY + 30, 96, 104 }, 66);
+    knob (GP_HUMANIZE, "HUMANIZE", { 980, kGenY + 30, 96, 104 }, 66);
+
+    // ---- Kopfzeile rechts ----
+    for (auto* b : { &tabMain, &tabFill })
+    {
+        b->setClickingTogglesState (false);
+        addAndMakeVisible (*b);
+    }
+    tabMain.onClick = [this] { setEditTarget (0); };
+    tabFill.onClick = [this] { setEditTarget (1); };
+    copyBtn.onClick = [this] { proc.copyMainToFill(); showNotice ("MAIN BAR COPIED TO FILL BAR"); };
+    clearBtn.onClick = [this] { proc.clearPattern (matrix->getEditTarget()); showNotice (matrix->getEditTarget() == 0 ? "MAIN BAR CLEARED" : "FILL BAR CLEARED"); };
+    addAndMakeVisible (copyBtn);
+    addAndMakeVisible (clearBtn);
+
+    dragTile = add<MidiDragTile> (proc);
+    dragTile->onNotice = [this] (const juce::String& t) { showNotice (t); };
+
+    for (int i = 0; i < 5; ++i)
+        barsBox.addItem (juce::String (exportBars (i)) + (i == 0 ? " BAR" : " BARS"), i + 1);
+    barsAtt = std::make_unique<juce::ComboBoxParameterAttachment> (*proc.getParam (GP_BARS), barsBox);
+    addAndMakeVisible (barsBox);
+
+    saveMidiBtn.onClick = [this]
+    {
+        const int bars = exportBars ((int) std::lround (proc.getValue (GP_BARS)));
+        chooser = std::make_unique<juce::FileChooser> ("Save MIDI file",
+            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Admiral Pattern.mid"), "*.mid");
+        juce::Component::SafePointer<MainPanel> sp (this);
+        chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [sp, bars] (const juce::FileChooser& fc)
+        {
+            if (sp == nullptr) return;
+            auto f = fc.getResult();
+            if (f == juce::File()) return;
+            if (! f.hasFileExtension ("mid")) f = f.withFileExtension ("mid");
+            sp->showNotice (sp->proc.writeMidiFile (f, bars) ? "SAVED: " + f.getFileName().toUpperCase() : juce::String ("SAVING FAILED"));
+        });
+    };
+    addAndMakeVisible (saveMidiBtn);
+
+    learnBtn.setClickingTogglesState (true);
+    learnBtn.onClick = [this]
+    {
+        proc.setLearnArmed (learnBtn.getToggleState());
+        learnBtn.setButtonText (learnBtn.getToggleState() ? "MIDI LEARN: ON" : "MIDI LEARN: OFF");
+    };
+    learnBtn.setToggleState (proc.isLearnArmed(), juce::dontSendNotification);
+    learnBtn.setButtonText (proc.isLearnArmed() ? "MIDI LEARN: ON" : "MIDI LEARN: OFF");
+    addAndMakeVisible (learnBtn);
+
+    setEditTarget (0);
+    selectTrack (0);
+    setSize (W, H);              // erst jetzt: resized() braucht alle Bedienelemente
+    updateCaption();
+    startTimerHz (30);
+}
+
+void MainPanel::buildTrackFx()
+{
+    fxGroupIndex = groups.size();
+    groups.push_back ({ "TRACK FX", { kPatX, kFxY, W - 2 * kPatX, kFxH } });
+
+    for (int t = 0; t < NUM_TRACKS; ++t)
+    {
+        auto* b = add<TrackSelectButton> (t, [this] (int tr) { selectTrack (tr); proc.previewTrack (tr); });
+        b->setBounds (34 + (t % 5) * 58, kFxY + 34 + (t / 5) * 30, 56, 28);
+        selButtons[(size_t) t] = b;
+
+        auto& v = fxComps[(size_t) t];
+        auto track = [&] (juce::Component* c) { v.push_back (c); return c; };
+        const int ky = kFxY + 44, cw = 64, ks = 50;
+
+        // Distortion
+        auto* type = add<ChoiceButtons> (proc, tp (t, TP_DS_TYPE), juce::StringArray { "Soft", "Hard", "Fold" }, "TYPE");
+        type->setBounds (338, kFxY + 46, 66, type->preferredHeight());
+        learners.push_back (type); track (type);
+        track (knob (tp (t, TP_DS_DRIVE), "DRIVE", { 408, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_DS_TONE), "TONE", { 408 + cw, ky, cw, 88 }, ks));
+        auto* dm = knob (tp (t, TP_DS_MIX), "MIX", { 408 + 2 * cw, ky, cw, 88 }, ks);
+        dm->getSlider().getProperties().set ("accent", true);
+        track (dm);
+
+        // Delay (HOST SYNC wie im Diplomat)
+        auto* sync = add<ParamPill> (proc, tp (t, TP_DL_SYNC), "HOST SYNC");
+        sync->setBounds (622, kFxY + 50, 88, 24);
+        learners.push_back (sync); track (sync);
+        auto* ping = add<ParamPill> (proc, tp (t, TP_DL_PING), "PING-PONG");
+        ping->setBounds (622, kFxY + 80, 88, 24);
+        learners.push_back (ping); track (ping);
+        dlTimeKnob[(size_t) t] = knob (tp (t, TP_DL_TIME), "TIME", { 714, ky, cw, 88 }, ks);
+        dlDivKnob[(size_t) t] = knob (tp (t, TP_DL_DIV), "NOTE", { 714 + cw, ky, cw, 88 }, ks);
+        track (dlTimeKnob[(size_t) t]); track (dlDivKnob[(size_t) t]);
+        track (knob (tp (t, TP_DL_FB), "FEEDBACK", { 714 + 2 * cw, ky, cw, 88 }, ks));
+        auto* lm = knob (tp (t, TP_DL_MIX), "MIX", { 714 + 3 * cw, ky, cw, 88 }, ks);
+        lm->getSlider().getProperties().set ("accent", true);
+        track (lm);
+
+        // Reverb
+        track (knob (tp (t, TP_RV_SIZE), "SIZE", { 990, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_RV_DAMP), "DAMP", { 990 + cw, ky, cw, 88 }, ks));
+        auto* rm = knob (tp (t, TP_RV_MIX), "MIX", { 990 + 2 * cw, ky, cw, 88 }, ks);
+        rm->getSlider().getProperties().set ("accent", true);
+        track (rm);
+    }
+
+    resetFxBtn.onClick = [this]
+    {
+        for (int p = TP_DS_TYPE; p <= TP_RV_MIX; ++p)
+            if (auto* prm = proc.getParam (tp (selTrack, p)))
+            {
+                prm->beginChangeGesture();
+                prm->setValueNotifyingHost (prm->getDefaultValue());
+                prm->endChangeGesture();
+            }
+        showNotice ("FX RESET: " + juce::String (tracks()[(size_t) selTrack].name));
+    };
+    addAndMakeVisible (resetFxBtn);
+    resetFxBtn.setBounds (1196, kFxY + 50, 94, 26);
+}
+
+void MainPanel::selectTrack (int t)
+{
+    selTrack = juce::jlimit (0, NUM_TRACKS - 1, t);
+    for (int i = 0; i < NUM_TRACKS; ++i)
+    {
+        for (auto* c : fxComps[(size_t) i]) c->setVisible (i == selTrack);
+        headers[(size_t) i]->setSelected (i == selTrack);
+        selButtons[(size_t) i]->set (i == selTrack, proc.trackHasFx (i));
+    }
+    groups[fxGroupIndex].title = "TRACK FX  -  " + juce::String (tracks()[(size_t) selTrack].name);
+    repaint (kPatX, kFxY, W - 2 * kPatX, 26);
+}
+
+MainPanel::~MainPanel()
+{
+    stopTimer();
+    setLookAndFeel (nullptr);
+}
+
+void MainPanel::setEditTarget (int which)
+{
+    matrix->setEditTarget (which);
+    tabMain.setToggleState (which == 0, juce::dontSendNotification);
+    tabFill.setToggleState (which == 1, juce::dontSendNotification);
+    updateCaption();
+}
+
+void MainPanel::resized()
+{
+    tabMain.setBounds (842, 8, 104, 20);
+    tabFill.setBounds (950, 8, 104, 20);
+    copyBtn.setBounds (1058, 8, 116, 20);
+    clearBtn.setBounds (1178, 8, 116, 20);
+    dragTile->setBounds (842, 32, 238, 30);
+    barsBox.setBounds (1086, 32, 94, 30);
+    saveMidiBtn.setBounds (1184, 32, 110, 30);
+    learnBtn.setBounds (1150, kFootY + 2, 144, 22);
+}
+
+//==============================================================================
+void MainPanel::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xff04050a));
+    drawSide (g, { 0, 0, 16, H }, true);
+    drawSide (g, { W - 16, 0, 16, H }, false);
+
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff0b0d20), 0.f, 0.f, col::body, 0.f, (float) H, false));
+    g.fillRect (16, 0, W - 32, H);
+    g.setColour (col::cyan.withAlpha (0.035f));
+    for (int gx = 16; gx < W - 16; gx += 32) g.fillRect (gx, 0, 1, H);
+    for (int gy = 0; gy < H; gy += 32)       g.fillRect (16, gy, W - 32, 1);
+
+    // Kopfzeile
+    g.setGradientFill (juce::ColourGradient (juce::Colour (0xff15183a), 0.f, 0.f, juce::Colour (0xff070815), 0.f, 82.f, false));
+    g.fillRect (16, 0, W - 32, 82);
+    g.setColour (col::cyan.withAlpha (0.25f)); g.fillRect (16, 80, W - 32, 6);
+    g.setColour (col::cyan);                  g.fillRect (16, 82, W - 32, 2);
+    g.setColour (col::magenta);               g.fillRect (16, 84, W - 32, 1);
+
+    // Name: ADMIRAL (Orbitron) mit Leuchten und Farbverlauf
+    {
+        const auto f = fonts::title (38.f).withExtraKerningFactor (0.04f);
+        juce::GlyphArrangement ga;
+        ga.addLineOfText (f, "ADMIRAL", 0.f, 0.f);
+        juce::Path p;
+        ga.createPath (p);
+        const auto bb = p.getBounds();
+        p.applyTransform (juce::AffineTransform::translation (46.f - bb.getX(), 52.f));
+        const auto pb = p.getBounds();
+        for (int i = 4; i >= 1; --i)
+        {
+            g.setColour (col::cyan.withAlpha (0.05f * (float) (5 - i)));
+            g.strokePath (p, juce::PathStrokeType ((float) i * 2.2f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        g.setGradientFill (juce::ColourGradient (col::cyan.brighter (0.2f), pb.getX(), 0.f, col::magenta, pb.getRight(), 0.f, false));
+        g.fillPath (p);
+        titleRight = (int) pb.getRight();
+    }
+    g.setColour (col::iceDim);
+    g.setFont (CyberLook::labelFont (10.5f));
+    g.drawText ("GENERATIVE DRUM COMPOSER", 48, 55, 330, 14, juce::Justification::centredLeft, false);
+    g.setColour (col::iceDim.withAlpha (0.8f));
+    g.setFont (CyberLook::labelFont (8.f));
+    g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc2\xa9")) + " by Christian Saak", 48, 67, 330, 11, juce::Justification::centredLeft, false);
+
+    // Modellnummer im Neon-Rahmen
+    const Rectangle<float> badge ((float) titleRight + 18.f, 16.f, 112.f, 46.f);
+    glowRect (g, badge, col::magenta, 6.f, 0.9f);
+    g.setColour (juce::Colour (0xff070815));
+    g.fillRoundedRectangle (badge, 6.f);
+    g.setColour (col::magenta);
+    g.drawRoundedRectangle (badge.reduced (1.f), 6.f, 2.f);
+    g.setColour (col::ice);
+    g.setFont (fonts::model (30.f).withExtraKerningFactor (0.06f));
+    g.drawText ("1506", badge.toNearestInt(), juce::Justification::centred, false);
+
+    // Neon-Streifen
+    const juce::Colour stripe[3] = { col::cyan, col::magenta, col::violet };
+    const int sx = titleRight + 150;
+    for (int i = 0; i < 3; ++i)
+    {
+        g.setColour (stripe[i].withAlpha (0.25f));
+        g.fillRect (sx, 25 + i * 10, 826 - sx, 8);
+        g.setColour (stripe[i]);
+        g.fillRect (sx, 26 + i * 10, 826 - sx, 4);
+    }
+
+    g.setColour (col::ice);
+    g.setFont (CyberLook::labelFont (10.5f));
+    g.drawText (caption, 842, 65, 452, 14, juce::Justification::centredLeft, false);
+
+    for (auto& grp : groups) drawPanel (g, grp.r, grp.title);
+
+    // Spaltenköpfe
+    drawColumnLabel (g, kHeadX, kGridY, kHeadW, "TRACK");
+    const char* kl[4] = { "TUNE", "DECAY", "PAN", "LEVEL" };
+    for (int i = 0; i < 4; ++i) drawColumnLabel (g, kKnobX + i * kKnobW, kGridY, kKnobW, kl[i]);
+    drawColumnLabel (g, kOutX, kGridY, 52, "OUT");
+
+    // TRACK FX: Abschnitte
+    drawGroupLabel (g, 338, kFxY + 28, 200, "DISTORTION");
+    drawGroupLabel (g, 622, kFxY + 28, 200, "DELAY");
+    drawGroupLabel (g, 990, kFxY + 28, 160, "REVERB");
+    g.setColour (col::edge.withAlpha (0.8f));
+    for (int x : { 326, 610, 978, 1184 }) g.fillRect (x, kFxY + 34, 1, kFxH - 44);
+    g.setColour (col::iceDim);
+    g.setFont (CyberLook::labelFont (9.f, false));
+    g.drawFittedText ("CHAIN: DIST > DELAY > REVERB.\nWORKS ON MAIN AND\nSEPARATE OUTS.", 1196, kFxY + 84, 100, 48, juce::Justification::topLeft, 3, 0.8f);
+
+    // Generator: Verlauf und Hinweis
+    g.setColour (col::iceDim);
+    g.setFont (CyberLook::labelFont (10.f));
+    g.drawText ("HISTORY " + histText, 262, kGenY + 68, 84, 26, juce::Justification::centred, false);
+    g.setFont (CyberLook::labelFont (9.5f, false));
+    g.drawFittedText ("LOCKED TRACKS STAY UNCHANGED.\nRIGHT-CLICK A STEP: VELOCITY.\nSHIFT-CLICK: ACCENT.  WHEEL: FINE.",
+                      700, kGenY + 36, 140, 90, juce::Justification::topLeft, 6, 0.9f);
+
+    // Groove: Positionsanzeige
+    {
+        const Rectangle<float> d (1088.f, (float) kGenY + 36.f, 196.f, 92.f);
+        g.setColour (juce::Colour (0xff04050c));
+        g.fillRoundedRectangle (d, 5.f);
+        g.setColour (col::edge);
+        g.drawRoundedRectangle (d.reduced (0.5f), 5.f, 1.f);
+        g.setColour (proc.isPlayingFill() && proc.getPlayStep() >= 0 ? col::magenta : col::cyan);
+        g.setFont (fonts::model (24.f));
+        g.drawText (posText, d.withTrimmedBottom (36.f).toNearestInt(), juce::Justification::centred, false);
+        g.setColour (col::iceDim);
+        g.setFont (CyberLook::labelFont (10.f));
+        const auto bpm = juce::String (proc.getCurrentBpm(), 1) + " BPM";
+        const juce::String src = proc.isHostSynced() ? "HOST SYNC" : (proc.getValue (GP_RUN) > 0.5f ? "INTERNAL RUN" : "STOPPED");
+        g.drawText (src + "  |  " + bpm, d.withTrimmedTop (56.f).toNearestInt(), juce::Justification::centred, false);
+    }
+
+    // Fußzeile
+    g.setColour (col::iceDim);
+    g.setFont (CyberLook::labelFont (10.5f, false));
+    g.drawText ("CLICK TRACK: SELECT + PREVIEW  |  RIGHT-CLICK: LOAD SAMPLE / MIDI LEARN  |  DROP AUDIO ON A TRACK",
+                36, kFootY, 640, 26, juce::Justification::centredLeft, false);
+    g.setColour (col::magenta);
+    g.setFont (CyberLook::labelFont (11.f));
+    g.drawText (noticeTicks > 0 ? notice : midiText, 690, kFootY, 450, 26, juce::Justification::centredRight, false);
+}
+
+void MainPanel::paintOverChildren (juce::Graphics& g)
+{
+    if (! dropElsewhere) return;
+    const auto r = Rectangle<float> (kPatX, kPatY, kPatW, kPatH).reduced (40.f, 180.f);
+    g.setColour (juce::Colour (0xd0070815));
+    g.fillRoundedRectangle (r, 8.f);
+    g.setColour (col::magenta);
+    g.drawRoundedRectangle (r, 8.f, 2.f);
+    g.setColour (col::ice);
+    g.setFont (CyberLook::labelFont (22.f));
+    g.drawText ("DROP THE AUDIO FILE ONTO A TRACK ROW", r.toNearestInt(), juce::Justification::centred, false);
+}
+
+//==============================================================================
+int MainPanel::rowAt (int x, int y) const
+{
+    if (x < kPatX || x > kPatX + kPatW || y < kRowsY) return -1;
+    const int r = (y - kRowsY) / StepMatrix::kRowH;
+    return juce::isPositiveAndBelow (r, NUM_TRACKS) ? r : -1;
+}
+
+void MainPanel::setDropRow (int r)
+{
+    if (r == dropRow) return;
+    dropRow = r;
+    for (int t = 0; t < NUM_TRACKS; ++t) headers[(size_t) t]->setDropHighlight (t == r);
+}
+
+bool MainPanel::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (auto& f : files) if (proc.isSampleFile (juce::File (f))) return true;
+    return false;
+}
+
+void MainPanel::fileDragMove (const juce::StringArray&, int x, int y)
+{
+    const int r = rowAt (x, y);
+    setDropRow (r);
+    const bool e = r < 0;
+    if (e != dropElsewhere) { dropElsewhere = e; repaint(); }
+}
+
+void MainPanel::fileDragExit (const juce::StringArray&)
+{
+    setDropRow (-1);
+    if (dropElsewhere) { dropElsewhere = false; repaint(); }
+}
+
+void MainPanel::filesDropped (const juce::StringArray& files, int x, int y)
+{
+    const int r = rowAt (x, y);
+    fileDragExit (files);
+    if (r < 0) { showNotice ("DROP AUDIO FILES ONTO A TRACK ROW"); return; }
+    for (auto& path : files)
+    {
+        const juce::File f (path);
+        if (! proc.isSampleFile (f)) continue;
+        juce::String msg;
+        proc.loadSampleFile (r, f, msg);
+        showNotice (msg);
+        proc.previewTrack (r);
+        break;
+    }
+}
+
+void MainPanel::startLoadSample (int track)
+{
+    chooser = std::make_unique<juce::FileChooser> ("Load sample for " + juce::String (tracks()[(size_t) track].name),
+                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory), proc.getSampleWildcard());
+    juce::Component::SafePointer<MainPanel> sp (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [sp, track] (const juce::FileChooser& fc)
+    {
+        if (sp == nullptr) return;
+        const auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        juce::String msg;
+        sp->proc.loadSampleFile (track, f, msg);
+        sp->showNotice (msg);
+        sp->proc.previewTrack (track);
+    });
+}
+
+void MainPanel::updateCaption()
+{
+    const juce::String which = matrix != nullptr && matrix->getEditTarget() == 1 ? "EDITING: FILL BAR" : "EDITING: MAIN BAR";
+    const int fe = fillEveryBars ((int) std::lround (proc.getValue (GP_FILL)));
+    const juce::String c = which + "   |   " + (fe > 0 ? "FILL EVERY " + juce::String (fe) + " BARS" : juce::String ("FILL OFF"))
+                         + "   |   " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (proc.getValue (GP_GENRE)))]).toUpperCase();
+    if (c != caption) { caption = c; repaint (842, 65, 452, 14); }
+}
+
+void MainPanel::timerCallback()
+{
+    for (auto* l : learners) l->refreshLearn();
+    matrix->update();
+    for (auto* h : headers) h->update();
+    for (int t = 0; t < NUM_TRACKS; ++t) selButtons[(size_t) t]->set (t == selTrack, proc.trackHasFx (t));
+    {
+        const bool sync = proc.getValue (tp (selTrack, TP_DL_SYNC)) > 0.5f;
+        dlTimeKnob[(size_t) selTrack]->setAlpha (sync ? 0.3f : 1.f);
+        dlDivKnob[(size_t) selTrack]->setAlpha (sync ? 1.f : 0.3f);
+    }
+    allOuts->setOn (proc.allOutsOn());
+    updateCaption();
+
+    const juce::String ht = juce::String (proc.getHistoryPos() + 1) + " / " + juce::String (proc.getHistorySize());
+    if (ht != histText) { histText = ht; repaint (262, kGenY + 68, 84, 26); }
+    histBack.setEnabled (proc.getHistoryPos() > 0);
+    histFwd.setEnabled (proc.getHistoryPos() < proc.getHistorySize() - 1);
+
+    const int st = proc.getPlayStep();
+    const juce::String pt = st < 0 ? juce::String ("- - -")
+                                   : "BAR " + juce::String (proc.getPlayBar() + 1) + "  " + juce::String (st + 1).paddedLeft ('0', 2);
+    if (pt != posText) { posText = pt; repaint (1088, kGenY + 36, 196, 92); }
+    static int slow = 0;
+    if (++slow % 15 == 0) repaint (1088, kGenY + 36, 196, 92);     // Tempo-Anzeige
+
+    if (const int ev = proc.getLearnEvent(); ev != seenLearnEvent)
+    {
+        seenLearnEvent = ev;
+        const int pi = proc.getLearnedParam();
+        if (pi >= 0) showNotice ("LEARNED:  CC " + juce::String (proc.getLearnedCc()) + "  >  " + juce::String (specs()[(size_t) pi].name).toUpperCase());
+    }
+
+    juce::String t;
+    if (proc.getLearnIndex() >= 0) t = "MIDI LEARN: MOVE A CONTROLLER ...";
+    else if (proc.getLastCc() >= 0) t = "LAST CC " + juce::String (proc.getLastCc()) + " = " + juce::String (proc.getLastCcValue());
+    else t = "NO MIDI CC RECEIVED YET";
+    bool rp = false;
+    if (noticeTicks > 0) { if (--noticeTicks == 0) rp = true; if (noticeTicks == 89) rp = true; }
+    if (t != midiText) { midiText = t; rp = true; }
+    if (rp || noticeTicks > 0) repaint (690, kFootY, 450, 26);
+}
+
+//==============================================================================
+AdmiralEditor::AdmiralEditor (AdmiralProcessor& p) : juce::AudioProcessorEditor (&p), panel (p)
+{
+    addAndMakeVisible (panel);
+    setResizable (true, true);
+    setResizeLimits (MainPanel::W / 2, MainPanel::H / 2, MainPanel::W * 2, MainPanel::H * 2);
+    getConstrainer()->setFixedAspectRatio ((double) MainPanel::W / (double) MainPanel::H);
+    setSize (MainPanel::W, MainPanel::H);
+}
+
+void AdmiralEditor::resized()
+{
+    panel.setBounds (0, 0, MainPanel::W, MainPanel::H);
+    panel.setTransform (juce::AffineTransform::scale ((float) getWidth() / (float) MainPanel::W));
+}
