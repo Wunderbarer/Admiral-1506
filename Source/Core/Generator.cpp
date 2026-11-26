@@ -194,6 +194,95 @@ Bar varyBar (const Bar& a, const GenSettings& s, Rng& r, float strength)
     return b;
 }
 
+int barDiff (const Bar& a, const Bar& b)
+{
+    int n = 0;
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        for (int k = 0; k < NUM_STEPS; ++k)
+            if (std::abs (a.v[(size_t) t][(size_t) k] - b.v[(size_t) t][(size_t) k]) > 1.0e-4f) ++n;
+    return n;
+}
+
+// Zusätzliche, deutlich hörbare Veränderungen für Takt 2 und 3 (Zählzeit 1 und Backbeat bleiben stehen)
+void extraMove (Bar& b, Rng& r, float v, bool lateBar)
+{
+    auto empty = [&] (int t, int k) { return b.v[(size_t) t][(size_t) k] <= 0.f; };
+    const int kinds = lateBar && v > 0.3f ? 8 : 7;
+    switch (r.below (kinds))
+    {
+        case 0: // Hi-Hat-Rhythmus in einer Takthälfte ändern: Achtel <-> Sechzehntel
+        {
+            const int h = r.chance (0.6f) ? 8 : 0;
+            int odd = 0;
+            for (int k = h + 1; k < h + 8; k += 2) if (! empty (T_CHAT, k)) ++odd;
+            for (int k = h + 1; k < h + 8; k += 2)
+            {
+                if (odd >= 2) b.v[T_CHAT][(size_t) k] = 0.f;
+                else if (empty (T_OHAT, k)) b.v[T_CHAT][(size_t) k] = r.range (0.38f, 0.5f);
+            }
+            break;
+        }
+        case 1: // Kick-Auftakt am Taktende
+            b.v[T_KICK][15] = r.range (0.65f, 0.8f);
+            if (r.chance (0.35f)) b.v[T_KICK][14] = r.range (0.6f, 0.75f);
+            break;
+        case 2: // Snare-Drag vor dem Backbeat
+            for (int k : { 3, 11 })
+                if (empty (T_SNARE, k) && r.chance (0.7f)) b.v[T_SNARE][(size_t) k] = r.range (0.3f, 0.42f);
+            break;
+        case 3: // Percussion antwortet (Rim oder Cowbell auf einem Offbeat)
+        {
+            const int t = r.chance (0.6f) ? T_RIM : T_COWBELL;
+            static const int pos[] = { 2, 6, 7, 10, 13, 14 };
+            const int k = pos[r.below (6)];
+            b.v[(size_t) t][(size_t) k] = empty (t, k) ? r.range (0.5f, 0.7f) : 0.f;
+            break;
+        }
+        case 4: // Clap / Ghost-Snare am Taktende
+            if (r.chance (0.5f)) b.v[T_CLAP][15] = empty (T_CLAP, 15) ? r.range (0.5f, 0.65f) : 0.f;
+            else if (empty (T_SNARE, 14)) b.v[T_SNARE][14] = r.range (0.35f, 0.45f);
+            break;
+        case 5: // offene Hi-Hat auf einem Offbeat
+        {
+            static const int pos[] = { 2, 6, 10, 14 };
+            const int k = pos[r.below (4)];
+            b.v[T_OHAT][(size_t) k] = empty (T_OHAT, k) ? r.range (0.6f, 0.8f) : 0.f;
+            b.v[T_CHAT][(size_t) k] = 0.f;
+            break;
+        }
+        case 6: // Kick verschieben oder ergänzen (nicht die Eins)
+        {
+            bool moved = false;
+            for (int k = 2; k < NUM_STEPS - 1 && ! moved; ++k)
+            {
+                auto& kr = b.v[T_KICK];
+                if (kr[(size_t) k] > 0.f && kr[(size_t) k] < 0.99f && kr[(size_t) k + 1] <= 0.f && r.chance (0.4f))
+                { kr[(size_t) k + 1] = kr[(size_t) k]; kr[(size_t) k] = 0.f; moved = true; }
+            }
+            if (! moved)
+            {
+                const int k = r.chance (0.5f) ? 10 : 11;
+                if (empty (T_KICK, k)) b.v[T_KICK][(size_t) k] = r.range (0.65f, 0.8f);
+            }
+            break;
+        }
+        default: // leiser Tom-Akzent (nur im dritten Takt)
+            if (r.chance (0.5f)) b.v[T_HTOM][13] = r.range (0.5f, 0.65f);
+            else b.v[T_LTOM][15] = r.range (0.55f, 0.7f);
+            break;
+    }
+}
+
+// Takt entwickeln, bis er sich hörbar (mindestens minDiff Schritte) vom Ausgangstakt unterscheidet
+Bar developBar (const Bar& from, const Bar& ref, const GenSettings& s, Rng& r, float strength, int minDiff, bool lateBar)
+{
+    Bar b = varyBar (from, s, r, strength);
+    const float v = std::clamp (s.variation, 0.f, 1.f);
+    for (int tries = 0; tries < 24 && barDiff (b, ref) < minDiff; ++tries)
+        extraMove (b, r, v, lateBar);
+    return b;
+}
+
 // Kleine Variation im letzten Viertel ("hin und wieder"): wird als Ending-Ebene abgelegt,
 // nur Schritte, die sich vom Groove unterscheiden. Index 8..11 = die letzten vier Schritte jeder Länge.
 void makeEnding (Pattern& p, const GenSettings& s, Rng& r)
@@ -303,8 +392,12 @@ Pattern Generator::generate (const GenSettings& s, uint32_t seed,
     Rng r (seed);
     Bar a;
     genBar (a, s, r);
-    const Bar b2 = varyBar (a, s, r, 0.6f);
-    const Bar b3 = varyBar (r.chance (0.5f) ? b2 : a, s, r, 1.f);
+    // Takt 2 und 3 entwickeln sich hörbar weiter: je mehr VARIATION, desto mehr Unterschiede
+    const float v = std::clamp (s.variation, 0.f, 1.f);
+    const int min2 = 2 + (int) std::lround (3.f * v);
+    const int min3 = 3 + (int) std::lround (5.f * v);
+    const Bar b2 = developBar (a, a, s, r, 0.6f, min2, false);
+    const Bar b3 = developBar (r.chance (0.5f) ? b2 : a, a, s, r, 1.f, min3, true);
 
     Pattern p;
     const Bar* bars[3] = { &a, &b2, &b3 };

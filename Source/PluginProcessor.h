@@ -111,6 +111,11 @@ public:
     bool hasUserSample (int track) const { return userSample[(size_t) track] != nullptr; }
     juce::String getSampleName (int track) const;
 
+    // --- Zuletzt benutzte Ordner (dauerhaft gespeichert, für alle Projekte und Instanzen) ---
+    juce::File getLastFolder (const juce::String& key, juce::File::SpecialLocationType fallback) const;
+    void setLastFolder (const juce::String& key, const juce::File& folder);
+    static juce::File settingsFile();
+
     // --- MIDI-Export (Drag & Drop in FL Studio / Datei speichern) ---
     bool writeMidiFile (const juce::File& dest, int bars) const;
     juce::File createMidiExportFile (int bars) const;   // Datei im Temp-Ordner, für Drag & Drop
@@ -174,7 +179,9 @@ private:
     juce::AudioFormatManager formats;
     std::array<std::array<std::shared_ptr<const ad::SampleData>, ad::NUM_TRACKS>, ad::NUM_KITS> kits;
     std::array<std::shared_ptr<const ad::SampleData>, ad::NUM_TRACKS> userSample;
-    std::vector<std::shared_ptr<const ad::SampleData>> keepAlive;     // alle je benutzten Samples (Audio-Thread-Sicherheit)
+    std::vector<std::shared_ptr<const ad::SampleData>> keepAlive;
+    juce::PropertiesFile& settings() const;
+    mutable std::unique_ptr<juce::PropertiesFile> settingsFileObj;     // alle je benutzten Samples (Audio-Thread-Sicherheit)
     int shownKit = -1;
 
     // Wiedergabe

@@ -522,9 +522,53 @@ bool AdmiralProcessor::loadSampleFile (int track, const juce::File& file, juce::
     userSample[(size_t) track] = s;
     keepAlive.push_back (s);
     updateSlots();
+    setLastFolder ("lastSampleFolder", file.getParentDirectory());   // nächster Dialog startet hier
     message = juce::String (tracks()[(size_t) track].name) + ": " + file.getFileName().toUpperCase()
             + (r->lengthInSamples > len ? "  (CUT TO 10 S)" : "");
     return true;
+}
+
+juce::File AdmiralProcessor::settingsFile()
+{
+    // Windows: %APPDATA%\CSSynth\Admiral1506.settings, macOS: ~/Library/Application Support/CSSynth/Admiral1506.settings
+    juce::PropertiesFile::Options o;
+    o.applicationName = "Admiral1506";
+    o.filenameSuffix = ".settings";
+    o.folderName = "CSSynth";
+    o.osxLibrarySubFolder = "Application Support";
+    return o.getDefaultFile();
+}
+
+juce::PropertiesFile& AdmiralProcessor::settings() const
+{
+    if (settingsFileObj == nullptr)
+    {
+        juce::PropertiesFile::Options o;
+        o.applicationName = "Admiral1506";
+        o.filenameSuffix = ".settings";
+        o.folderName = "CSSynth";
+        o.osxLibrarySubFolder = "Application Support";
+        o.millisecondsBeforeSaving = 0;
+        settingsFileObj = std::make_unique<juce::PropertiesFile> (o);
+    }
+    return *settingsFileObj;
+}
+
+juce::File AdmiralProcessor::getLastFolder (const juce::String& key, juce::File::SpecialLocationType fallback) const
+{
+    auto& s = settings();
+    s.reload();                                    // andere Admiral-Instanzen könnten ihn geändert haben
+    const juce::File f (s.getValue (key));
+    if (s.containsKey (key) && f.isDirectory()) return f;
+    return juce::File::getSpecialLocation (fallback);
+}
+
+void AdmiralProcessor::setLastFolder (const juce::String& key, const juce::File& folder)
+{
+    if (! folder.isDirectory()) return;
+    auto& s = settings();
+    s.setValue (key, folder.getFullPathName());
+    s.saveIfNeeded();
 }
 
 void AdmiralProcessor::resetSample (int track)

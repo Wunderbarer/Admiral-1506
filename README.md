@@ -40,8 +40,8 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 | DENSITY | wie viele der optionalen Schläge gespielt werden (wenig = minimal, viel = dicht, 16tel-Hats) |
 | VARIATION | zusätzliche Zufallsschläge, Ghost-Notes, Anschlags-Streuung, längere Fills |
 | FILL | Fill in jedem 2. / 4. / 8. Durchlauf des Patterns, danach automatisch ein Crash |
-| **PATTERN** | 10 Spuren × bis zu **48 Schritte**. **LENGTH** 16 / 24 / 32 / 48. Das Raster zeigt 16 Schritte je Seite; die Seitenwahl (1-16, 17-32, 33-48) zeigt eine Mini-Vorschau des ganzen Patterns, **FOLLOW** blättert beim Abspielen mit. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
-| Variations-Zone | Der Generator erzeugt immer 48 Schritte (3 Takte, die sich leicht weiterentwickeln) und setzt hin und wieder eine kleine Variation ins **letzte Viertel** (magenta markiert, kleines Dreieck = weicht vom Groove ab). Kürzen auf 32 / 24 / 16 ist nicht zerstörend: die Variation wandert ans neue Ende, beim Verlängern ist alles wieder da. Rechtsklick in der Zone: Variation an einem Schritt oder ganz entfernen. |
+| **PATTERN** | 10 Spuren × bis zu **48 Schritte**. **LENGTH** 16 / 24 / 32 / 48. Das Raster zeigt immer das ganze Pattern; die Zellen werden bei 32 und 48 Schritten schmaler, Takte sind durch eine Linie getrennt. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
+| Variations-Zone | Der Generator erzeugt immer 48 Schritte: 3 Takte, die sich hörbar weiterentwickeln (Takt 2 und 3 unterscheiden sich immer vom ersten – je mehr VARIATION, desto deutlicher) und setzt hin und wieder eine kleine Variation ins **letzte Viertel** (magenta markiert, kleines Dreieck = weicht vom Groove ab). Kürzen auf 32 / 24 / 16 ist nicht zerstörend: die Variation wandert ans neue Ende, beim Verlängern ist alles wieder da. Rechtsklick in der Zone: Variation an einem Schritt oder ganz entfernen. |
 | LOCK | sperrt Pattern **und** Sound der Spur. Per Rechtsklick getrennt: *Lock pattern* (bleibt bei GENERATE) und *Lock sound* (bleibt bei NEW KIT / MUTATE) – Anzeige dann LOCK P bzw. LOCK S |
 | MUTE / OUT | Spur stumm / auf eigenen Ausgang legen |
 | TUNE · DECAY · PAN · LEVEL | Stimmung (±12 Halbtöne), Ausklang, Panorama, Lautstärke je Spur |
@@ -55,7 +55,7 @@ in Tonhöhe und Klangfarbe (Round Robin, kein „Maschinengewehr“-Effekt), 4-P
 
 **Spur anklicken** = auswählen und vorhören · **Rechtsklick › Sound source** = Klang einer Spur aus einem bestimmten Kit (z. B. Linn-Snare im Analog-Kit) · **Doppelklick / Rechtsklick › Load sample** = eigene Audiodatei
 (WAV, AIFF, FLAC, OGG, MP3; max. 10 s) · Audiodatei **auf eine Spur ziehen** geht auch.
-Eigene Samples werden im Projekt gespeichert.
+Eigene Samples werden im Projekt gespeichert. Der Dialog öffnet immer den zuletzt benutzten Sample-Ordner (dauerhaft gemerkt, auch nach einem Neustart und in allen Projekten; gespeichert unter Windows in `%APPDATA%\CSSynth\Admiral1506.settings`, macOS in `~/Library/Application Support/CSSynth/`). Dasselbe gilt getrennt für **SAVE MIDI …**.
 
 ### Wiedergabe
 * **Im Host:** Admiral läuft synchron zum Transport der DAW (Tempo, Position, Loops).

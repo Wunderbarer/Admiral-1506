@@ -396,6 +396,27 @@ int main (int argc, char** argv)
         check (ad::exportBars (2) == 3 && ad::exportBars (6) == 12, "Export-Längen 3 / 6 / 12 Takte vorhanden");
     }
 
+    // Zuletzt benutzter Sample-Ordner wird dauerhaft gemerkt (auch für neue Instanzen)
+    {
+        const auto dir = out.getChildFile ("Meine Samples").getChildFile ("Drums");
+        dir.createDirectory();
+        ad::SampleData sd; sd.sampleRate = 44100.0; sd.data.assign (4410, 0.f);
+        for (size_t i = 0; i < sd.data.size(); ++i) sd.data[i] = std::sin ((float) i * 0.1f) * std::exp (-(float) i / 800.f);
+        const auto wavFile = dir.getChildFile ("TestKick.wav");
+        {
+            juce::MemoryOutputStream decoded;
+            juce::Base64::convertFromBase64 (decoded, AdmiralProcessor::encodeSample (sd));
+            wavFile.replaceWithData (decoded.getData(), decoded.getDataSize());
+        }
+        juce::String msg;
+        const bool loaded = p->loadSampleFile (ad::T_RIM, wavFile, msg);
+        check (loaded && p->getLastFolder ("lastSampleFolder", juce::File::userMusicDirectory) == dir, "Sample-Ordner gemerkt: " + dir.getFullPathName());
+        std::unique_ptr<AdmiralProcessor> fresh (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
+        check (fresh->getLastFolder ("lastSampleFolder", juce::File::userMusicDirectory) == dir, "Neue Instanz startet im zuletzt benutzten Ordner");
+        p->resetSample (ad::T_RIM);
+        std::printf ("        (Einstellungsdatei: %s)\n", AdmiralProcessor::settingsFile().getFullPathName().toRawUTF8());
+    }
+
     // MIDI-Export
     {
         const auto f = out.getChildFile ("export_test.mid");
@@ -436,20 +457,34 @@ int main (int argc, char** argv)
         juce::PNGImageFormat png;
         check (png.writeImageToStream (img, os), "Oberfläche gerendert: " + f.getFullPathName());
 
-        // zweites Bild: 48 Schritte, Seite 33-48 mit Variations-Zone
-        p->getParam (ad::GP_LENGTH)->setValueNotifyingHost (1.f);
-        p->generateNew();
+        // weitere Bilder: das Raster in allen Längen (zeigt immer das ganze Pattern)
         std::function<StepMatrix* (juce::Component*)> findMatrix = [&] (juce::Component* c) -> StepMatrix*
         {
             if (auto* m = dynamic_cast<StepMatrix*> (c)) return m;
             for (auto* ch : c->getChildren()) if (auto* m = findMatrix (ch)) return m;
             return nullptr;
         };
-        if (auto* m = findMatrix (ed.get()))
+        auto* m = findMatrix (ed.get());
+        check (m != nullptr, "Schrittraster gefunden");
+        p->getParam (ad::GP_LENGTH)->setValueNotifyingHost (1.f);
+        for (int tries = 0; tries < 40; ++tries)       // Pattern mit Variation am Ende zeigen
         {
-            m->follow = false;
-            m->update();
-            m->setPage (2);
+            p->generateNew();
+            bool hasEnd = false;
+            for (auto& row : p->getPattern().ending) for (float x : row) if (x >= 0.f) hasEnd = true;
+            if (hasEnd) break;
+        }
+        for (int lc = 0; lc < 4; ++lc)
+        {
+            auto* lp = p->getParam (ad::GP_LENGTH);
+            lp->setValueNotifyingHost (lp->convertTo0to1 ((float) lc));
+            if (m != nullptr) m->update();
+            check (m != nullptr && m->length() == p->getLength(), "Raster zeigt " + juce::String (p->getLength()) + " Schritte");
+            auto im = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+            const auto fx = out.getChildFile ("admiral_ui_" + juce::String (p->getLength()) + ".png");
+            fx.deleteFile();
+            juce::FileOutputStream ox (fx);
+            png.writeImageToStream (im, ox);
         }
         auto img2 = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
         const auto f2 = out.getChildFile ("admiral_ui_page3.png");

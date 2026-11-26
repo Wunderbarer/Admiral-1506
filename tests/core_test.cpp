@@ -130,19 +130,23 @@ int main (int argc, char** argv)
             GenSettings a = gs; a.density = 0.1f; lo += Generator::generate (a, sd, locks, Pattern()).count (48);
             GenSettings b = gs; b.density = 0.9f; hi += Generator::generate (b, sd, locks, Pattern()).count (48);
             const Pattern q = Generator::generate (gs, sd * 31u, locks, Pattern());
-            bool diff = false, end = false;
+            bool end = false;
+            int d2 = 0, d3 = 0;
             for (int t = 0; t < NUM_TRACKS; ++t)
             {
                 for (int k = 0; k < 16; ++k)
-                    if (q.body[(size_t) t][(size_t) k] != q.body[(size_t) t][(size_t) k + 16] || q.body[(size_t) t][(size_t) k] != q.body[(size_t) t][(size_t) k + 32]) diff = true;
+                {
+                    if (std::abs (q.body[(size_t) t][(size_t) k] - q.body[(size_t) t][(size_t) k + 16]) > 1e-4f) ++d2;
+                    if (std::abs (q.body[(size_t) t][(size_t) k] - q.body[(size_t) t][(size_t) k + 32]) > 1e-4f) ++d3;
+                }
                 for (float x : q.ending[(size_t) t]) if (x >= 0.f) end = true;
             }
-            evolving += diff ? 1 : 0;
+            evolving += (d2 >= 2 && d3 >= 3) ? 1 : 0;      // Takt 2: mind. 2, Takt 3: mind. 3 Schritte anders
             withEnding += end ? 1 : 0;
         }
         std::printf ("  100 Pattern: %d entwickeln sich über 3 Takte, %d mit Variation im letzten Viertel\n", evolving, withEnding);
         if (hi <= lo) fail ("Dichte wirkt nicht");
-        if (evolving < 60) fail ("Takte 2/3 zu selten verändert");
+        if (evolving < 100) fail ("Takte 2/3 unterscheiden sich nicht in jedem Pattern hörbar");
         if (withEnding < 25 || withEnding > 95) fail ("Variation am Ende nicht 'hin und wieder'");
 
         // Kürzen: die Variation wandert ans neue Ende

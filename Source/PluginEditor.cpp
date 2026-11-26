@@ -126,10 +126,22 @@ void ParamPill::mouseDown (const juce::MouseEvent& e)
 }
 
 //==============================================================================
-void StepMatrix::setPage (int p)
+void StepMatrix::layout()
 {
-    p = juce::jlimit (0, juce::jmax (0, numPages() - 1), p);
-    if (p != page) { page = p; repaint(); if (onPageChanged) onPageChanged(); }
+    // Lücken: kleine zwischen den Zählzeiten (4 Schritte), größere zwischen den Takten (16 Schritte)
+    const float beatGap = len <= 16 ? 6.f : len <= 24 ? 4.f : 3.f;
+    const float barGap = len > 16 ? 10.f : 0.f;
+    float gaps = 0.f;
+    for (int k = 1; k < len; ++k) gaps += k % 16 == 0 ? barGap : k % 4 == 0 ? beatGap : 0.f;
+    const float pitch = ((float) kWidth - 2.f - gaps) / (float) len;
+    cellW = pitch - (len <= 16 ? 2.f : 1.5f);
+    float x = 0.f;
+    for (int k = 0; k < len; ++k)
+    {
+        if (k > 0) x += k % 16 == 0 ? barGap : k % 4 == 0 ? beatGap : 0.f;
+        colX[(size_t) k] = x;
+        x += pitch;
+    }
 }
 
 void StepMatrix::update()
@@ -144,14 +156,12 @@ void StepMatrix::update()
     if (rev != seenRevision || l != len)
     {
         cache = proc.getPattern();
-        len = l;
+        if (l != len) { len = l; layout(); }
         seenRevision = rev;
         changed = true;
-        if (page >= numPages()) setPage (numPages() - 1);
     }
     playing = ps; playingFill = pf; muteMask = mask;
-    if (follow && playing >= 0) setPage (playing / kCols);
-    if (changed) { repaint(); if (onPageChanged) onPageChanged(); }
+    if (changed) repaint();
 }
 
 void StepMatrix::paint (juce::Graphics& g)
@@ -159,35 +169,35 @@ void StepMatrix::paint (juce::Graphics& g)
     const bool fillView = target == 1;
     auto colourFor = [&] (float v) { return fillView ? col::accent (v) : col::value (v); };
     const int zoneStart = len - ad::Pattern::zoneFor (len, fillView);
+    const bool narrow = cellW < 24.f;
+    const float rad = narrow ? 2.5f : 4.f;
 
-    // Kopfzeile: Schrittnummern, Zählzeiten hervorgehoben
-    for (int i = 0; i < kCols; ++i)
+    // Kopfzeile: Schrittnummern (bei schmalen Zellen nur die Zählzeiten), Taktanfänge hervorgehoben
+    for (int k = 0; k < len; ++k)
     {
-        const int k = page * kCols + i;
-        if (k >= len) continue;
-        const bool beat = k % 4 == 0;
+        const bool beat = k % 4 == 0, bar = k % 16 == 0;
+        if (narrow && ! beat) continue;
         const bool now = k == playing;
-        g.setColour (now ? col::yellow : k >= zoneStart ? col::magenta.brighter (0.2f) : beat ? col::ice : col::iceDim);
-        g.setFont (CyberLook::labelFont (beat ? 11.f : 10.f));
-        g.drawText (juce::String (k + 1), colX (i), 0, kCellW, kHeader - 4, juce::Justification::centred, false);
+        g.setColour (now ? col::yellow : k >= zoneStart ? col::magenta.brighter (0.2f) : bar ? col::cyan : beat ? col::ice : col::iceDim);
+        g.setFont (CyberLook::labelFont (bar ? 11.f : beat ? 10.5f : 10.f));
+        const int w = narrow ? 30 : (int) cellW;
+        g.drawText (juce::String (k + 1), juce::jmax (0, (int) colX[(size_t) k] - (narrow ? 1 : 0)), 0, w, kHeader - 4,
+                    narrow ? juce::Justification::centredLeft : juce::Justification::centred, false);
+    }
+    // Takt-Trenner
+    for (int k = 16; k < len; k += 16)
+    {
+        const float x = colX[(size_t) k] - 5.5f;
+        g.setColour (col::cyan.withAlpha (0.35f));
+        g.fillRect (x, (float) kHeader, 1.5f, (float) (getHeight() - kHeader));
     }
 
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
         const bool muted = proc.getValue (tp (t, TP_MUTE)) > 0.5f;
-        for (int i = 0; i < kCols; ++i)
+        for (int k = 0; k < len; ++k)
         {
-            const int k = page * kCols + i;
-            const auto r = Rectangle<float> ((float) colX (i) + 1.f, (float) (kHeader + t * kRowH) + 3.f, (float) kCellW, (float) kRowH - 6.f);
-            if (k >= len)
-            {
-                // jenseits der Pattern-Länge: gesperrt
-                g.setColour (juce::Colour (0xff07080f));
-                g.fillRoundedRectangle (r, 4.f);
-                g.setColour (col::edge.withAlpha (0.25f));
-                g.drawRoundedRectangle (r.reduced (0.5f), 4.f, 1.f);
-                continue;
-            }
+            const auto r = Rectangle<float> (colX[(size_t) k] + 1.f, (float) (kHeader + t * kRowH) + 3.f, cellW, (float) kRowH - 6.f);
             const float v = cell (t, k);
             const bool now = k == playing;
             const bool group = (k / 4) % 2 == 0;
@@ -195,31 +205,34 @@ void StepMatrix::paint (juce::Graphics& g)
             const float dim = (fillView && ! zone) ? 0.45f : 1.f;     // Fill-Ansicht: Groove gedämpft
 
             g.setColour (zone ? (group ? juce::Colour (0xff1a0f26) : juce::Colour (0xff1e112c)) : (group ? juce::Colour (0xff0b0d1e) : juce::Colour (0xff0e1126)));
-            g.fillRoundedRectangle (r, 4.f);
+            g.fillRoundedRectangle (r, rad);
 
             if (v > 0.f)
             {
                 const auto c = colourFor (0.2f + 0.8f * v).withMultipliedAlpha ((muted ? 0.35f : 1.f) * dim);
-                glowRect (g, r.reduced (2.f), c, 3.f, ((muted ? 0.2f : 0.5f) + 0.5f * v) * dim);
+                const auto inner = r.reduced (narrow ? 1.5f : 2.f);
+                if (! narrow) glowRect (g, inner, c, 3.f, ((muted ? 0.2f : 0.5f) + 0.5f * v) * dim);
                 g.setGradientFill (juce::ColourGradient (c, r.getX(), r.getY(), c.darker (0.6f), r.getX(), r.getBottom(), false));
-                g.fillRoundedRectangle (r.reduced (2.f), 3.f);
+                g.fillRoundedRectangle (inner, rad - 1.f);
                 const float h = (r.getHeight() - 8.f) * (1.f - v);
                 if (h > 0.5f)
                 {
                     g.setColour (juce::Colours::black.withAlpha (0.45f));
-                    g.fillRoundedRectangle (r.getX() + 4.f, r.getY() + 4.f, r.getWidth() - 8.f, h, 2.f);
+                    const float ins = narrow ? 2.5f : 4.f;
+                    g.fillRoundedRectangle (r.getX() + ins, r.getY() + 4.f, r.getWidth() - 2.f * ins, h, 1.5f);
                 }
             }
             // Schritt weicht vom Groove ab (Variation / Fill): kleines Dreieck in der Ecke
             if (cache.isVaried (t, k, len, fillView))
             {
+                const float ts = juce::jmin (7.f, cellW * 0.45f);
                 juce::Path tri;
-                tri.addTriangle (r.getRight() - 9.f, r.getY() + 2.f, r.getRight() - 2.f, r.getY() + 2.f, r.getRight() - 2.f, r.getY() + 9.f);
+                tri.addTriangle (r.getRight() - ts - 2.f, r.getY() + 2.f, r.getRight() - 2.f, r.getY() + 2.f, r.getRight() - 2.f, r.getY() + ts + 2.f);
                 g.setColour (col::magenta);
                 g.fillPath (tri);
             }
             g.setColour (now ? col::yellow : zone ? col::magenta.withAlpha (0.55f) : (k % 4 == 0 ? col::edge.brighter (0.4f) : col::edge.withAlpha (0.8f)));
-            g.drawRoundedRectangle (r.reduced (0.5f), 4.f, now ? 2.f : 1.f);
+            g.drawRoundedRectangle (r.reduced (0.5f), rad, now ? 2.f : 1.f);
         }
     }
 }
@@ -229,11 +242,12 @@ bool StepMatrix::cellAt (juce::Point<int> p, int& track, int& step) const
     if (p.y < kHeader) return false;
     track = (p.y - kHeader) / kRowH;
     if (! juce::isPositiveAndBelow (track, NUM_TRACKS)) return false;
-    for (int i = 0; i < kCols; ++i)
-        if (p.x >= colX (i) && p.x < colX (i) + kPitch)
+    // nächstliegende Spalte (Klicks in die Lücken zählen zur Zelle links davon)
+    for (int k = len - 1; k >= 0; --k)
+        if ((float) p.x >= colX[(size_t) k])
         {
-            step = page * kCols + i;
-            return step < len;
+            step = k;
+            return (float) p.x <= colX[(size_t) k] + cellW + 6.f;
         }
     return false;
 }
@@ -296,61 +310,6 @@ void StepMatrix::showVelocityMenu (int t, int k)
         static const float vals[] = { 0.f, 1.f, 0.8f, 0.55f, 0.35f, 0.f };
         sp->proc.setCell (sp->target, t, k, vals[r]);
     });
-}
-
-//==============================================================================
-void PageSelector::paint (juce::Graphics& g)
-{
-    const int pagesTotal = ad::MAX_STEPS / StepMatrix::kCols;
-    const float w = (float) getWidth() / (float) pagesTotal;
-    const auto& pt = matrix.cached();
-    const int len = matrix.length();
-    const bool fillView = matrix.getEditTarget() == 1;
-    for (int p = 0; p < pagesTotal; ++p)
-    {
-        const auto r = Rectangle<float> ((float) p * w + 2.f, 1.f, w - 4.f, (float) getHeight() - 2.f);
-        const bool exists = p * StepMatrix::kCols < len;
-        const bool sel = p == matrix.getPage();
-        const bool play = matrix.playingStep() >= 0 && matrix.playingStep() / StepMatrix::kCols == p;
-        if (sel) glowRect (g, r, col::cyan, 3.f, 0.5f);
-        g.setColour (exists ? (sel ? juce::Colour (0xff1f3a5e) : juce::Colour (0xff12152c)) : juce::Colour (0xff07080f));
-        g.fillRoundedRectangle (r, 3.f);
-        g.setColour (sel ? col::cyan : play ? col::yellow : col::edge.withAlpha (exists ? 1.f : 0.3f));
-        g.drawRoundedRectangle (r.reduced (0.5f), 3.f, sel || play ? 1.4f : 1.f);
-
-        const int first = p * StepMatrix::kCols + 1;
-        g.setColour (exists ? (sel ? col::ice : col::iceDim) : col::iceDim.withAlpha (0.3f));
-        g.setFont (CyberLook::labelFont (9.f));
-        g.drawText (juce::String (first) + "-" + juce::String (first + StepMatrix::kCols - 1), (int) r.getX() + 3, (int) r.getY(), 36, (int) r.getHeight(),
-                    juce::Justification::centredLeft, false);
-        if (! exists) continue;
-
-        // Mini-Vorschau: 16 Schritte x 10 Spuren
-        const float x0 = r.getX() + 41.f, cw = (r.getRight() - 4.f - x0) / (float) StepMatrix::kCols;
-        const float ch = (r.getHeight() - 4.f) / (float) NUM_TRACKS;
-        const int zoneStart = len - ad::Pattern::zoneFor (len, fillView);
-        for (int i = 0; i < StepMatrix::kCols; ++i)
-        {
-            const int k = p * StepMatrix::kCols + i;
-            if (k >= len) break;
-            for (int t = 0; t < NUM_TRACKS; ++t)
-            {
-                const float v = pt.value (t, k, len, fillView);
-                if (v <= 0.f) continue;
-                g.setColour ((k >= zoneStart ? col::magenta : col::cyan).withAlpha (0.35f + 0.65f * v));
-                g.fillRect (x0 + (float) i * cw, r.getY() + 2.f + (float) t * ch, juce::jmax (1.f, cw - 1.f), juce::jmax (1.f, ch - 0.6f));
-            }
-        }
-    }
-}
-
-void PageSelector::mouseDown (const juce::MouseEvent& e)
-{
-    const int p = (int) ((float) e.x / ((float) getWidth() / (float) (ad::MAX_STEPS / StepMatrix::kCols)));
-    if (p * StepMatrix::kCols >= matrix.length()) return;
-    matrix.follow = false;          // Seite von Hand gewählt: nicht mehr automatisch folgen
-    matrix.setPage (p);
-    repaint();
 }
 
 //==============================================================================
@@ -599,13 +558,6 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
     {
         auto* lenSel = add<HChoice> (proc, GP_LENGTH, juce::StringArray { "16", "24", "32", "48" });
         lenSel->setBounds (90, kPatY + 29, 196, 24);
-        pages = add<PageSelector> (*matrix);
-        pages->setBounds (352, kPatY + 28, 372, 26);
-        followPill = add<LedPill> ("FOLLOW", col::yellow);
-        followPill->setBounds (732, kPatY + 29, 84, 24);
-        followPill->setOn (matrix->follow);
-        followPill->onClick = [this] { matrix->follow = ! matrix->follow; followPill->setOn (matrix->follow); };
-        matrix->onPageChanged = [this] { pages->repaint(); };
     }
 
     for (int t = 0; t < NUM_TRACKS; ++t)
@@ -753,7 +705,7 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
     {
         const int bars = exportBars ((int) std::lround (proc.getValue (GP_BARS)));
         chooser = std::make_unique<juce::FileChooser> ("Save MIDI file",
-            juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("Admiral Pattern.mid"), "*.mid");
+            proc.getLastFolder ("lastMidiFolder", juce::File::userDocumentsDirectory).getChildFile ("Admiral Pattern.mid"), "*.mid");
         juce::Component::SafePointer<MainPanel> sp (this);
         chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
                                   | juce::FileBrowserComponent::warnAboutOverwriting,
@@ -763,7 +715,9 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
             auto f = fc.getResult();
             if (f == juce::File()) return;
             if (! f.hasFileExtension ("mid")) f = f.withFileExtension ("mid");
-            sp->showNotice (sp->proc.writeMidiFile (f, bars) ? "SAVED: " + f.getFileName().toUpperCase() : juce::String ("SAVING FAILED"));
+            const bool ok = sp->proc.writeMidiFile (f, bars);
+            if (ok) sp->proc.setLastFolder ("lastMidiFolder", f.getParentDirectory());
+            sp->showNotice (ok ? "SAVED: " + f.getFileName().toUpperCase() : juce::String ("SAVING FAILED"));
         });
     };
     addAndMakeVisible (saveMidiBtn);
@@ -875,7 +829,6 @@ MainPanel::~MainPanel()
 void MainPanel::setEditTarget (int which)
 {
     matrix->setEditTarget (which);
-    if (pages != nullptr) pages->repaint();
     tabMain.setToggleState (which == 0, juce::dontSendNotification);
     tabFill.setToggleState (which == 1, juce::dontSendNotification);
     updateCaption();
@@ -973,15 +926,15 @@ void MainPanel::paint (juce::Graphics& g)
         g.setColour (col::iceDim);
         g.setFont (CyberLook::labelFont (10.f));
         g.drawText ("LENGTH", 34, y, 54, 24, juce::Justification::centredLeft, false);
-        g.drawText ("STEPS", 302, y, 48, 24, juce::Justification::centredLeft, false);
+        g.drawText ("STEPS", 292, y, 48, 24, juce::Justification::centredLeft, false);
         const bool fillView = matrix->getEditTarget() == 1;
-        const Rectangle<float> sw (830.f, (float) y + 6.f, 14.f, 12.f);
+        const Rectangle<float> sw (370.f, (float) y + 6.f, 14.f, 12.f);
         g.setColour (juce::Colour (0xff1e112c)); g.fillRoundedRectangle (sw, 2.f);
         g.setColour (col::magenta.withAlpha (0.7f)); g.drawRoundedRectangle (sw, 2.f, 1.f);
         g.setColour (col::iceDim);
         g.setFont (CyberLook::labelFont (9.5f));
         g.drawText (fillView ? "FILL ZONE  (PLAYS EVERY N-TH CYCLE)" : "VARIATION ZONE  (LAST QUARTER, MOVES WHEN SHORTENED)",
-                    850, y, 290, 24, juce::Justification::centredLeft, false);
+                    390, y, 400, 24, juce::Justification::centredLeft, false);
     }
 
 
@@ -1125,8 +1078,10 @@ void MainPanel::filesDropped (const juce::StringArray& files, int x, int y)
 
 void MainPanel::startLoadSample (int track)
 {
+    // startet im zuletzt benutzten Sample-Ordner (beim ersten Mal: Musik-Ordner)
     chooser = std::make_unique<juce::FileChooser> ("Load sample for " + juce::String (tracks()[(size_t) track].name),
-                                                   juce::File::getSpecialLocation (juce::File::userMusicDirectory), proc.getSampleWildcard());
+                                                   proc.getLastFolder ("lastSampleFolder", juce::File::userMusicDirectory),
+                                                   proc.getSampleWildcard());
     juce::Component::SafePointer<MainPanel> sp (this);
     chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [sp, track] (const juce::FileChooser& fc)
     {
@@ -1155,7 +1110,6 @@ void MainPanel::timerCallback()
 {
     for (auto* l : learners) l->refreshLearn();
     matrix->update();
-    followPill->setOn (matrix->follow);
     for (auto* h : headers) h->update();
     for (int t = 0; t < NUM_TRACKS; ++t) selButtons[(size_t) t]->set (t == selTrack, proc.trackHasFx (t));
     {
