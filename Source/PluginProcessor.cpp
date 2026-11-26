@@ -93,7 +93,7 @@ AdmiralProcessor::AdmiralProcessor()
     formats.registerBasicFormats();
 
     // Eingebaute Kits aus den eingebetteten WAV-Dateien lesen
-    for (int k = 0; k < 2; ++k)
+    for (int k = 0; k < NUM_KITS; ++k)
         for (int t = 0; t < NUM_TRACKS; ++t)
         {
             const juce::String res = juce::String (kitNames()[(size_t) k]) + "_" + tracks()[(size_t) t].file + "_wav";
@@ -137,6 +137,7 @@ void AdmiralProcessor::prepareToPlay (double sampleRate, int)
     sr = sampleRate;
     engine.prepare (sampleRate);
     for (auto& f : fx) f.prepare ((float) sampleRate);
+    masterBus.prepare (sampleRate);
     trackBuf.setSize (2 * NUM_TRACKS, kChunk, false, true, false);
     seq.reset();
     events.reserve (512);
@@ -321,8 +322,19 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
             p[i] = softLimit (p[i] * g);
         }
     };
-    applyMaster (mainL);
-    if (mainR != mainL) applyMaster (mainR);
+    // Haupt-Summe: Master-Lautstärke, dann GLUE (Bus-Kompressor) und TAPE, zuletzt sanfte Begrenzung
+    for (int i = 0; i < n; ++i)
+    {
+        const float g = m0 + (m1 - m0) * (float) i / (float) n;
+        mainL[i] *= g;
+        if (mainR != mainL) mainR[i] *= g;
+    }
+    masterBus.process (mainL, mainR, n, getValue (GP_GLUE), getValue (GP_TAPE));
+    for (int i = 0; i < n; ++i)
+    {
+        mainL[i] = softLimit (mainL[i]);
+        if (mainR != mainL) mainR[i] = softLimit (mainR[i]);
+    }
     for (int t = 0; t < NUM_TRACKS; ++t)
         if (usesAux[t])
         {
@@ -414,7 +426,7 @@ void AdmiralProcessor::timerCallback()
 //==============================================================================
 void AdmiralProcessor::updateSlots()
 {
-    shownKit = juce::jlimit (0, 1, (int) std::lround (getValue (GP_KIT)));
+    shownKit = juce::jlimit (0, NUM_KITS - 1, (int) std::lround (getValue (GP_KIT)));
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
         auto s = userSample[(size_t) t] != nullptr ? userSample[(size_t) t] : kits[(size_t) shownKit][(size_t) t];
@@ -425,7 +437,7 @@ void AdmiralProcessor::updateSlots()
 juce::String AdmiralProcessor::getSampleName (int track) const
 {
     if (auto& u = userSample[(size_t) track]) return juce::String (u->name);
-    return juce::String (kitNames()[(size_t) juce::jlimit (0, 1, shownKit)]).toUpperCase() + " KIT";
+    return juce::String (kitNames()[(size_t) juce::jlimit (0, NUM_KITS - 1, shownKit)]).toUpperCase() + " KIT";
 }
 
 FxSettings AdmiralProcessor::fxSettings (int t) const
@@ -444,6 +456,9 @@ FxSettings AdmiralProcessor::fxSettings (int t) const
     f.rvSize  = getValue (tp (t, TP_RV_SIZE));
     f.rvDamp  = getValue (tp (t, TP_RV_DAMP));
     f.rvMix   = getValue (tp (t, TP_RV_MIX));
+    f.hp      = getValue (tp (t, TP_FLT_HP));
+    f.lp      = getValue (tp (t, TP_FLT_LP));
+    f.res     = getValue (tp (t, TP_FLT_RES));
     return f;
 }
 

@@ -83,8 +83,8 @@ int main (int argc, char** argv)
     int failures = 0;
     auto fail = [&] (const std::string& m) { std::printf ("FEHLER: %s\n", m.c_str()); ++failures; };
 
-    std::vector<std::unique_ptr<SampleData>> kit[2];
-    for (int k = 0; k < 2; ++k)
+    std::vector<std::unique_ptr<SampleData>> kit[NUM_KITS];
+    for (int k = 0; k < NUM_KITS; ++k)
         for (int t = 0; t < NUM_TRACKS; ++t)
         {
             auto s = std::make_unique<SampleData>();
@@ -129,7 +129,7 @@ int main (int argc, char** argv)
         // 8 Takte abspielen (Fill alle 4 Takte, Swing, Humanize)
         DrumEngine eng;
         eng.prepare (sr);
-        const int kitIdx = genre % 2;
+        const int kitIdx = genre % NUM_KITS;
         for (int t = 0; t < NUM_TRACKS; ++t) eng.setSample (t, kit[kitIdx][(size_t) t].get());
         std::array<TrackSettings, NUM_TRACKS> ts {};
         for (int t = 0; t < NUM_TRACKS; ++t) { ts[(size_t) t].level = tracks()[(size_t) t].level; ts[(size_t) t].pan = tracks()[(size_t) t].pan; }
@@ -208,6 +208,37 @@ int main (int argc, char** argv)
             }
             if (n < 64 || n > 65) fail ("Blockgröße " + std::to_string (bs) + ": " + std::to_string (n) + " statt 64 Schläge");
         }
+    }
+
+    // Klangfarbe nach Anschlag und Round Robin (Snare des Kits ANALOG)
+    {
+        DrumEngine e;
+        auto render = [&] (float vel)
+        {
+            e.prepare (48000.0);
+            e.setSample (T_SNARE, kit[0][T_SNARE].get());
+            TrackSettings t; t.level = 1.f;
+            e.trigger (T_SNARE, vel, 0, t);
+            std::vector<float> l (24000, 0.f), r (24000, 0.f);
+            float* ls[NUM_TRACKS]; float* rs[NUM_TRACKS];
+            for (int i = 0; i < NUM_TRACKS; ++i) { ls[i] = l.data(); rs[i] = r.data(); }
+            e.render (ls, rs, 24000);
+            return l;
+        };
+        auto brightness = [] (const std::vector<float>& x)
+        {
+            double e = 0, d = 0;
+            for (size_t i = 1; i < x.size(); ++i) { e += (double) x[i] * x[i]; d += (double) (x[i] - x[i - 1]) * (x[i] - x[i - 1]); }
+            return std::sqrt (d / std::max (e, 1e-12));
+        };
+        const double hard = brightness (render (1.f)), soft = brightness (render (0.3f));
+        std::printf ("\nKlangfarbe Snare: Helligkeit laut %.3f, leise %.3f\n", hard, soft);
+        if (soft >= hard * 0.85) fail ("Leise Schläge klingen nicht dumpfer");
+        const auto a = render (1.f), b = render (1.f);
+        double diff = 0, en = 0;
+        for (size_t i = 0; i < a.size(); ++i) { diff += (double) (a[i] - b[i]) * (a[i] - b[i]); en += (double) a[i] * a[i]; }
+        std::printf ("Round Robin: Unterschied zweier gleicher Schläge %.1f %%\n", 100.0 * std::sqrt (diff / en));
+        if (diff / en < 1e-4) fail ("Round Robin wirkt nicht");
     }
 
     std::printf ("\n%s (%d Fehler)\n", failures == 0 ? "ALLE TESTS BESTANDEN" : "TESTS FEHLGESCHLAGEN", failures);

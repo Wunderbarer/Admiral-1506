@@ -86,6 +86,8 @@ private:
         double pos = 0.0, rate = 1.0;
         float gl = 0.f, gr = 0.f;
         float env = 1.f, envMul = 1.f;
+        bool flt = false;          // Klangfarbe nach Anschlagstärke (SVF-Tiefpass)
+        float a1 = 0.f, a2 = 0.f, a3 = 0.f, ic1 = 0.f, ic2 = 0.f;
         int delay = 0;             // Samples bis zum Start
         int fadeDelay = -1;        // Samples bis zum Ausblenden (-1 = nicht)
         int fadeLeft = 0;          // laufendes Ausblenden: verbleibende Samples
@@ -99,6 +101,8 @@ private:
     double sr = 44100.0;
     int fadeSamples = 132;
     uint32_t age = 0;
+    uint32_t rng = 0x2545F491u;
+    float rnd() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (float) (rng >> 8) / 16777216.f * 2.f - 1.f; }   // -1..1
     std::array<uint32_t, kVoices> started {};
 };
 } // namespace ad

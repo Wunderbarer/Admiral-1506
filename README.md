@@ -44,11 +44,14 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 | MUTE / OUT | Spur stumm / auf eigenen Ausgang legen |
 | TUNE · DECAY · PAN · LEVEL | Stimmung (±12 Halbtöne), Ausklang, Panorama, Lautstärke je Spur |
 | MAIN BAR / FILL BAR | welcher Takt im Raster bearbeitet wird (Fill wird magenta dargestellt) |
-| **TRACK FX** | Effekte der gewählten Spur (Spur im Raster oder in der Spurwahl anklicken): **Distortion** (Soft/Hard/Fold, Drive, Tone, Mix) › **Delay** (HOST SYNC, Time bzw. Notenwert, Feedback, Mix, Ping-Pong) › **Reverb** (Size, Damp, Mix). Spuren mit aktiven Effekten zeigen ein **FX**-Zeichen. RESET FX setzt die Spur zurück. |
-| **GROOVE** | SWING (verschiebt jede zweite 16tel), HUMANIZE (leichte Zeit- und Anschlags-Streuung) |
-| **MASTER** | Kit (ANALOG = weich/808-artig, PUNCH = hart/909-artig), **ALL OUTS** (alle Spuren auf eigene Ausgänge), Master-Lautstärke |
+| **TRACK FX** | Effekte der gewählten Spur (Spur im Raster oder in der Spurwahl anklicken): **Filter** (Highpass, Lowpass, Reso) › **Distortion** (Soft/Hard/Fold, Drive, Tone, Mix) › **Delay** (HOST SYNC, Time bzw. Notenwert, Feedback, Mix, Ping-Pong) › **Reverb** (Size, Damp, Mix). Spuren mit aktiven Effekten zeigen ein **FX**-Zeichen. RESET FX setzt die Spur zurück. |
+| **GROOVE** | SWING (verschiebt jede zweite 16tel), HUMANIZE (leichte Zeit- und Anschlags-Streuung), INT. TEMPO / INT. RUN |
+| **MASTER** | Kit (ANALOG = weich/808-artig, PUNCH = hart/909-artig, LINN = 80er-Sample-Drumcomputer mit 8-Bit-Korn), **GLUE** (Bus-Kompressor mit Sidechain-Hochpass, GR-Anzeige), **TAPE** (Band-Sättigung, antialiased), **ALL OUTS** (alle Spuren auf eigene Ausgänge), Master-Lautstärke. GLUE/TAPE wirken auf den Main-Ausgang. |
 
-**Spur anklicken** = vorhören · **Doppelklick / Rechtsklick › Load sample** = eigene Audiodatei
+**Klang-Engine:** leise Schläge klingen automatisch dumpfer (Klangfarbe folgt der Anschlagstärke), jeder Schlag variiert minimal
+in Tonhöhe und Klangfarbe (Round Robin, kein „Maschinengewehr“-Effekt), 4-Punkt-Interpolation beim Umstimmen.
+
+**Spur anklicken** = auswählen und vorhören · **Doppelklick / Rechtsklick › Load sample** = eigene Audiodatei
 (WAV, AIFF, FLAC, OGG, MP3; max. 10 s) · Audiodatei **auf eine Spur ziehen** geht auch.
 Eigene Samples werden im Projekt gespeichert.
 

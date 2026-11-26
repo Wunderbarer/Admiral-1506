@@ -457,17 +457,14 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         kit->setBounds (kMasterX + 12, kPatY + 34, kMasterW - 24, kit->preferredHeight());
         learners.push_back (kit);
 
-        knob (GP_TEMPO, "INT. TEMPO", { kMasterX + 10, kPatY + 116, kMasterW - 20, 84 }, 58);
-
-        auto* run = add<ParamPill> (proc, GP_RUN, "INT. RUN");
-        run->setBounds (kMasterX + 16, kPatY + 206, kMasterW - 32, 24);
-        learners.push_back (run);
+        knob (GP_GLUE, "GLUE", { kMasterX + 6, kPatY + 120, 63, 64 }, 44);
+        knob (GP_TAPE, "TAPE", { kMasterX + 69, kPatY + 120, 63, 64 }, 44);
         auto* mo = add<ParamPill> (proc, GP_MIDIOUT, "MIDI OUT");
-        mo->setBounds (kMasterX + 16, kPatY + 236, kMasterW - 32, 24);
+        mo->setBounds (kMasterX + 16, kPatY + 212, kMasterW - 32, 24);
         learners.push_back (mo);
 
         allOuts = add<LedPill> ("ALL OUTS", col::magenta);
-        allOuts->setBounds (kMasterX + 16, kPatY + 266, kMasterW - 32, 24);
+        allOuts->setBounds (kMasterX + 16, kPatY + 240, kMasterW - 32, 24);
         allOuts->onClick = [this]
         {
             const bool on = ! proc.allOutsOn();
@@ -476,7 +473,7 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         };
 
         auto* f = add<FaderCell> (proc, GP_MASTER, "MASTER", true);
-        f->setBounds (kMasterX + (kMasterW - 70) / 2, kPatY + 298, 70, kPatH - 306);
+        f->setBounds (kMasterX + (kMasterW - 70) / 2, kPatY + 270, 70, kPatH - 278);
         learners.push_back (&f->getSlider());
     }
 
@@ -521,8 +518,14 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
 
     // ---- Bereich GROOVE ----
     groups.push_back ({ "GROOVE", { 862, kGenY, 438, kGenH } });
-    knob (GP_SWING, "SWING", { 878, kGenY + 30, 96, 104 }, 66);
-    knob (GP_HUMANIZE, "HUMANIZE", { 980, kGenY + 30, 96, 104 }, 66);
+    knob (GP_SWING, "SWING", { 872, kGenY + 30, 84, 104 }, 60);
+    knob (GP_HUMANIZE, "HUMANIZE", { 956, kGenY + 30, 84, 104 }, 60);
+    knob (GP_TEMPO, "INT. TEMPO", { 1040, kGenY + 30, 84, 104 }, 60);
+    {
+        auto* run = add<ParamPill> (proc, GP_RUN, "INT. RUN");
+        run->setBounds (1132, kGenY + 104, 154, 26);
+        learners.push_back (run);
+    }
 
     // ---- Kopfzeile rechts ----
     for (auto* b : { &tabMain, &tabFill })
@@ -589,42 +592,47 @@ void MainPanel::buildTrackFx()
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
         auto* b = add<TrackSelectButton> (t, [this] (int tr) { selectTrack (tr); proc.previewTrack (tr); });
-        b->setBounds (34 + (t % 5) * 58, kFxY + 34 + (t / 5) * 30, 56, 28);
+        b->setBounds (34 + (t % 5) * 48, kFxY + 34 + (t / 5) * 30, 46, 28);
         selButtons[(size_t) t] = b;
 
         auto& v = fxComps[(size_t) t];
         auto track = [&] (juce::Component* c) { v.push_back (c); return c; };
-        const int ky = kFxY + 44, cw = 64, ks = 50;
+        const int ky = kFxY + 44, cw = 58, ks = 46;
+
+        // Filter (erste Stufe)
+        track (knob (tp (t, TP_FLT_HP), "HIGHPASS", { 290, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_FLT_LP), "LOWPASS", { 290 + cw, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_FLT_RES), "RESO", { 290 + 2 * cw, ky, cw, 88 }, ks));
 
         // Distortion
         auto* type = add<ChoiceButtons> (proc, tp (t, TP_DS_TYPE), juce::StringArray { "Soft", "Hard", "Fold" }, "TYPE");
-        type->setBounds (338, kFxY + 46, 66, type->preferredHeight());
+        type->setBounds (488, kFxY + 46, 62, type->preferredHeight());
         learners.push_back (type); track (type);
-        track (knob (tp (t, TP_DS_DRIVE), "DRIVE", { 408, ky, cw, 88 }, ks));
-        track (knob (tp (t, TP_DS_TONE), "TONE", { 408 + cw, ky, cw, 88 }, ks));
-        auto* dm = knob (tp (t, TP_DS_MIX), "MIX", { 408 + 2 * cw, ky, cw, 88 }, ks);
+        track (knob (tp (t, TP_DS_DRIVE), "DRIVE", { 554, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_DS_TONE), "TONE", { 554 + cw, ky, cw, 88 }, ks));
+        auto* dm = knob (tp (t, TP_DS_MIX), "MIX", { 554 + 2 * cw, ky, cw, 88 }, ks);
         dm->getSlider().getProperties().set ("accent", true);
         track (dm);
 
         // Delay (HOST SYNC wie im Diplomat)
         auto* sync = add<ParamPill> (proc, tp (t, TP_DL_SYNC), "HOST SYNC");
-        sync->setBounds (622, kFxY + 50, 88, 24);
+        sync->setBounds (752, kFxY + 50, 84, 24);
         learners.push_back (sync); track (sync);
         auto* ping = add<ParamPill> (proc, tp (t, TP_DL_PING), "PING-PONG");
-        ping->setBounds (622, kFxY + 80, 88, 24);
+        ping->setBounds (752, kFxY + 80, 84, 24);
         learners.push_back (ping); track (ping);
-        dlTimeKnob[(size_t) t] = knob (tp (t, TP_DL_TIME), "TIME", { 714, ky, cw, 88 }, ks);
-        dlDivKnob[(size_t) t] = knob (tp (t, TP_DL_DIV), "NOTE", { 714 + cw, ky, cw, 88 }, ks);
+        dlTimeKnob[(size_t) t] = knob (tp (t, TP_DL_TIME), "TIME", { 842, ky, cw, 88 }, ks);
+        dlDivKnob[(size_t) t] = knob (tp (t, TP_DL_DIV), "NOTE", { 842 + cw, ky, cw, 88 }, ks);
         track (dlTimeKnob[(size_t) t]); track (dlDivKnob[(size_t) t]);
-        track (knob (tp (t, TP_DL_FB), "FEEDBACK", { 714 + 2 * cw, ky, cw, 88 }, ks));
-        auto* lm = knob (tp (t, TP_DL_MIX), "MIX", { 714 + 3 * cw, ky, cw, 88 }, ks);
+        track (knob (tp (t, TP_DL_FB), "FEEDBACK", { 842 + 2 * cw, ky, cw, 88 }, ks));
+        auto* lm = knob (tp (t, TP_DL_MIX), "MIX", { 842 + 3 * cw, ky, cw, 88 }, ks);
         lm->getSlider().getProperties().set ("accent", true);
         track (lm);
 
         // Reverb
-        track (knob (tp (t, TP_RV_SIZE), "SIZE", { 990, ky, cw, 88 }, ks));
-        track (knob (tp (t, TP_RV_DAMP), "DAMP", { 990 + cw, ky, cw, 88 }, ks));
-        auto* rm = knob (tp (t, TP_RV_MIX), "MIX", { 990 + 2 * cw, ky, cw, 88 }, ks);
+        track (knob (tp (t, TP_RV_SIZE), "SIZE", { 1098, ky, cw, 88 }, ks));
+        track (knob (tp (t, TP_RV_DAMP), "DAMP", { 1098 + cw, ky, cw, 88 }, ks));
+        auto* rm = knob (tp (t, TP_RV_MIX), "MIX", { 1098 + 2 * cw, ky, cw, 88 }, ks);
         rm->getSlider().getProperties().set ("accent", true);
         track (rm);
     }
@@ -641,7 +649,7 @@ void MainPanel::buildTrackFx()
         showNotice ("FX RESET: " + juce::String (tracks()[(size_t) selTrack].name));
     };
     addAndMakeVisible (resetFxBtn);
-    resetFxBtn.setBounds (1196, kFxY + 50, 94, 26);
+    resetFxBtn.setBounds (36, kFxY + 100, 234, 26);
 }
 
 void MainPanel::selectTrack (int t)
@@ -764,14 +772,32 @@ void MainPanel::paint (juce::Graphics& g)
     drawColumnLabel (g, kOutX, kGridY, 52, "OUT");
 
     // TRACK FX: Abschnitte
-    drawGroupLabel (g, 338, kFxY + 28, 200, "DISTORTION");
-    drawGroupLabel (g, 622, kFxY + 28, 200, "DELAY");
-    drawGroupLabel (g, 990, kFxY + 28, 160, "REVERB");
+    drawGroupLabel (g, 296, kFxY + 28, 160, "FILTER");
+    drawGroupLabel (g, 488, kFxY + 28, 200, "DISTORTION");
+    drawGroupLabel (g, 752, kFxY + 28, 200, "DELAY");
+    drawGroupLabel (g, 1104, kFxY + 28, 160, "REVERB");
     g.setColour (col::edge.withAlpha (0.8f));
-    for (int x : { 326, 610, 978, 1184 }) g.fillRect (x, kFxY + 34, 1, kFxH - 44);
-    g.setColour (col::iceDim);
-    g.setFont (CyberLook::labelFont (9.f, false));
-    g.drawFittedText ("CHAIN: DIST > DELAY > REVERB.\nWORKS ON MAIN AND\nSEPARATE OUTS.", 1196, kFxY + 84, 100, 48, juce::Justification::topLeft, 3, 0.8f);
+    for (int x : { 282, 476, 740, 1086 }) g.fillRect (x, kFxY + 34, 1, kFxH - 44);
+
+    // Master: Anzeige der Pegelreduktion des GLUE-Kompressors (0 .. 12 dB)
+    {
+        const Rectangle<float> m ((float) kMasterX + 30.f, (float) kPatY + 194.f, (float) kMasterW - 42.f, 8.f);
+        g.setColour (col::iceDim);
+        g.setFont (CyberLook::labelFont (8.5f));
+        g.drawText ("GR", kMasterX + 10, kPatY + 191, 20, 14, juce::Justification::centredLeft, false);
+        g.setColour (juce::Colour (0xff03040a));
+        g.fillRoundedRectangle (m, 2.f);
+        g.setColour (col::edge);
+        g.drawRoundedRectangle (m, 2.f, 1.f);
+        const float f = juce::jlimit (0.f, 1.f, shownGr / 12.f);
+        if (f > 0.01f)
+        {
+            const auto bar = m.withX (m.getRight() - m.getWidth() * f).withWidth (m.getWidth() * f).reduced (1.f);
+            glowRect (g, bar, col::magenta, 1.f, 0.6f);
+            g.setColour (col::magenta);
+            g.fillRoundedRectangle (bar, 1.f);
+        }
+    }
 
     // Generator: Verlauf und Hinweis
     g.setColour (col::iceDim);
@@ -783,19 +809,19 @@ void MainPanel::paint (juce::Graphics& g)
 
     // Groove: Positionsanzeige
     {
-        const Rectangle<float> d (1088.f, (float) kGenY + 36.f, 196.f, 92.f);
+        const Rectangle<float> d (1132.f, (float) kGenY + 36.f, 154.f, 62.f);
         g.setColour (juce::Colour (0xff04050c));
         g.fillRoundedRectangle (d, 5.f);
         g.setColour (col::edge);
         g.drawRoundedRectangle (d.reduced (0.5f), 5.f, 1.f);
         g.setColour (proc.isPlayingFill() && proc.getPlayStep() >= 0 ? col::magenta : col::cyan);
-        g.setFont (fonts::model (24.f));
-        g.drawText (posText, d.withTrimmedBottom (36.f).toNearestInt(), juce::Justification::centred, false);
+        g.setFont (fonts::model (20.f));
+        g.drawText (posText, d.withTrimmedBottom (24.f).toNearestInt(), juce::Justification::centred, false);
         g.setColour (col::iceDim);
         g.setFont (CyberLook::labelFont (10.f));
         const auto bpm = juce::String (proc.getCurrentBpm(), 1) + " BPM";
         const juce::String src = proc.isHostSynced() ? "HOST SYNC" : (proc.getValue (GP_RUN) > 0.5f ? "INTERNAL RUN" : "STOPPED");
-        g.drawText (src + "  |  " + bpm, d.withTrimmedTop (56.f).toNearestInt(), juce::Justification::centred, false);
+        g.drawText (src + "  |  " + bpm, d.withTrimmedTop (38.f).withTrimmedBottom (6.f).toNearestInt(), juce::Justification::centred, false);
     }
 
     // Fußzeile
@@ -911,6 +937,11 @@ void MainPanel::timerCallback()
         dlDivKnob[(size_t) selTrack]->setAlpha (sync ? 1.f : 0.3f);
     }
     allOuts->setOn (proc.allOutsOn());
+    if (const float gr = proc.getGainReductionDb(); std::abs (gr - shownGr) > 0.05f)
+    {
+        shownGr = gr;
+        repaint (kMasterX + 8, kPatY + 190, kMasterW - 16, 16);
+    }
     updateCaption();
 
     const juce::String ht = juce::String (proc.getHistoryPos() + 1) + " / " + juce::String (proc.getHistorySize());
@@ -921,9 +952,9 @@ void MainPanel::timerCallback()
     const int st = proc.getPlayStep();
     const juce::String pt = st < 0 ? juce::String ("- - -")
                                    : "BAR " + juce::String (proc.getPlayBar() + 1) + "  " + juce::String (st + 1).paddedLeft ('0', 2);
-    if (pt != posText) { posText = pt; repaint (1088, kGenY + 36, 196, 92); }
+    if (pt != posText) { posText = pt; repaint (1132, kGenY + 36, 154, 62); }
     static int slow = 0;
-    if (++slow % 15 == 0) repaint (1088, kGenY + 36, 196, 92);     // Tempo-Anzeige
+    if (++slow % 15 == 0) repaint (1132, kGenY + 36, 154, 62);     // Tempo-Anzeige
 
     if (const int ev = proc.getLearnEvent(); ev != seenLearnEvent)
     {

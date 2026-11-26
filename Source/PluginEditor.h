@@ -181,6 +181,7 @@ private:
     std::array<KnobCell*, ad::NUM_TRACKS> dlTimeKnob {}, dlDivKnob {};
     LedPill* allOuts = nullptr;
     size_t fxGroupIndex = 0;
+    float shownGr = 0.f;
     juce::TextButton resetFxBtn { "RESET FX" };
 
     juce::ComboBox genreBox, barsBox;

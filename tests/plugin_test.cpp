@@ -78,6 +78,54 @@ int main (int argc, char** argv)
     const juce::File out (argc > 1 ? juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]) : juce::File::getCurrentWorkingDirectory());
     out.createDirectory();
 
+    // Hörbeispiel: plugin_test <Ordner> --demo  (rendert mehrere Genres mit Fills, GLUE und TAPE in eine WAV-Datei)
+    if (argc > 2 && juce::String (argv[2]) == "--demo")
+    {
+        std::unique_ptr<AdmiralProcessor> d (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
+        const double sr = 48000.0; const int block = 512;
+        std::vector<float> L, R;
+        auto setP = [&] (int idx, float plain) { auto* q = d->getParam (idx); q->setValueNotifyingHost (q->convertTo0to1 (plain)); };
+        const int genres[] = { 0, 1, 3, 4, 5 };
+        const int kitsUsed[] = { 2, 1, 2, 0, 1 };
+        for (int gi = 0; gi < 5; ++gi)
+        {
+            const int g = genres[gi];
+            setP (ad::GP_GENRE, (float) g); setP (ad::GP_KIT, (float) kitsUsed[gi]);
+            setP (ad::GP_FILL, 1.f); setP (ad::GP_SWING, g == 3 ? 0.35f : 0.f);
+            setP (ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.25f);
+            setP (ad::tp (ad::T_CLAP, ad::TP_RV_MIX), 0.3f);
+            setP (ad::tp (ad::T_RIM, ad::TP_DL_MIX), 0.35f);
+            d->generateNew();
+            d->pollParameters();
+            FakeHost host; host.bpm = ad::Generator::suggestedBpm (g);
+            d->setPlayHead (&host);
+            d->prepareToPlay (sr, block);
+            juce::AudioBuffer<float> buf (d->getTotalNumOutputChannels(), block);
+            juce::MidiBuffer midi;
+            const int blocks = (int) (4 * 4.0 * 60.0 / host.bpm * sr / block);
+            for (int b = 0; b < blocks; ++b)
+            {
+                midi.clear();
+                d->processBlock (buf, midi);
+                for (int i = 0; i < block; ++i) { L.push_back (buf.getSample (0, i)); R.push_back (buf.getSample (1, i)); }
+                host.ppq += block / (sr * 60.0 / host.bpm);
+            }
+            d->setPlayHead (nullptr);
+        }
+        juce::MemoryOutputStream o;
+        const auto nS = (juce::uint32) L.size();
+        o.write ("RIFF", 4); o.writeInt ((int) (36 + nS * 4)); o.write ("WAVEfmt ", 8); o.writeInt (16); o.writeShort (1); o.writeShort (2);
+        o.writeInt (48000); o.writeInt (48000 * 4); o.writeShort (4); o.writeShort (16); o.write ("data", 4); o.writeInt ((int) (nS * 4));
+        for (size_t i = 0; i < L.size(); ++i)
+        {
+            o.writeShort ((short) juce::jlimit (-32767, 32767, juce::roundToInt (L[i] * 32767.f)));
+            o.writeShort ((short) juce::jlimit (-32767, 32767, juce::roundToInt (R[i] * 32767.f)));
+        }
+        out.getChildFile ("admiral_demo.wav").replaceWithData (o.getData(), o.getDataSize());
+        std::printf ("Demo geschrieben: %s\n", out.getChildFile ("admiral_demo.wav").getFullPathName().toRawUTF8());
+        return 0;
+    }
+
     std::unique_ptr<AdmiralProcessor> p (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
     check (p != nullptr, "Plugin erzeugt");
     check (p->getPattern (0).count() > 5, "Start-Pattern vorhanden (" + juce::String (p->getPattern (0).count()) + " Schläge)");
@@ -93,11 +141,11 @@ int main (int argc, char** argv)
     for (int g = 0; g < (int) ad::genreNames().size(); ++g)
     {
         p->getParam (ad::GP_GENRE)->setValueNotifyingHost (p->getParam (ad::GP_GENRE)->convertTo0to1 ((float) g));
-        p->getParam (ad::GP_KIT)->setValueNotifyingHost ((float) (g % 2));
+        p->getParam (ad::GP_KIT)->setValueNotifyingHost (p->getParam (ad::GP_KIT)->convertTo0to1 ((float) (g % ad::NUM_KITS)));
         p->generateNew();
         p->pollParameters();   // sonst per Timer: Kit-Wechsel übernehmen
         auto rg = run (*p, 4);
-        check (! rg.nan && rg.rms > 0.02 && rg.peak <= 1.f, juce::String (ad::genreNames()[(size_t) g]) + " / Kit " + juce::String (g % 2)
+        check (! rg.nan && rg.rms > 0.02 && rg.peak <= 1.f, juce::String (ad::genreNames()[(size_t) g]) + " / Kit " + juce::String (ad::kitNames()[(size_t) (g % ad::NUM_KITS)])
                + ": RMS " + juce::String (rg.rms, 3) + ", Spitze " + juce::String (rg.peak, 2));
     }
 
@@ -130,7 +178,27 @@ int main (int argc, char** argv)
         check (p->trackHasFx (ad::T_SNARE) && ! p->trackHasFx (ad::T_KICK), "FX-Anzeige je Spur");
         auto wet = run (*p, 4, 2);
         check (! wet.nan && wet.auxRms > dry.auxRms * 1.15, "Hall/Delay auf der Snare hörbar (RMS Snare-Ausgang " + juce::String (dry.auxRms, 3) + " -> " + juce::String (wet.auxRms, 3) + ")");
+        setP (ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.f);
+        setP (ad::tp (ad::T_SNARE, ad::TP_DL_MIX), 0.f);
+        setP (ad::tp (ad::T_SNARE, ad::TP_FLT_LP), 400.f);
+        auto filt = run (*p, 4, 2);
+        check (filt.auxRms < dry.auxRms * 0.8 && filt.auxRms > 0.0005, "Tiefpass 400 Hz dämpft die Snare (RMS " + juce::String (dry.auxRms, 3) + " -> " + juce::String (filt.auxRms, 3) + ")");
+        setP (ad::tp (ad::T_SNARE, ad::TP_FLT_LP), 20000.f);
         setP (ad::tp (ad::T_SNARE, ad::TP_OUT), 0.f);
+
+        // Master-Bus: GLUE komprimiert hörbar, TAPE bleibt pegelneutral
+        setP (ad::GP_GLUE, 1.f);
+        p->takePeakGainReductionDb();
+        run (*p, 2);
+        const float grDb = p->takePeakGainReductionDb();
+        check (grDb > 1.f, "GLUE-Kompressor arbeitet (bis " + juce::String (grDb, 1) + " dB Pegelreduktion)");
+        setP (ad::GP_GLUE, 0.f); setP (ad::GP_TAPE, 0.f);
+        auto clean = run (*p, 4);
+        setP (ad::GP_TAPE, 1.f);
+        auto taped = run (*p, 4);
+        check (! taped.nan && taped.rms > clean.rms * 0.6 && taped.rms < clean.rms * 1.4,
+               "TAPE ohne Pegelsprung (RMS " + juce::String (clean.rms, 3) + " -> " + juce::String (taped.rms, 3) + ")");
+        setP (ad::GP_GLUE, 0.3f); setP (ad::GP_TAPE, 0.25f);
 
         for (int t = 0; t < ad::NUM_TRACKS; ++t)
         {

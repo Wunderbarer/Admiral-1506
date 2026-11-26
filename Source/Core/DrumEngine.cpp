@@ -4,6 +4,15 @@
 
 namespace ad
 {
+namespace
+{
+// Wie stark die Anschlagstärke die Klangfarbe dämpft (0 = gar nicht) - je Instrument
+constexpr float kVelTone[NUM_TRACKS]   = { 0.35f, 0.80f, 0.60f, 0.70f, 0.70f, 0.50f, 0.50f, 0.50f, 0.50f, 0.60f };
+// "Round Robin": zufällige Mikro-Verstimmung (Halbtöne) und Klangfarben-Streuung je Schlag
+constexpr float kRrPitch[NUM_TRACKS]   = { 0.03f, 0.12f, 0.15f, 0.20f, 0.15f, 0.08f, 0.08f, 0.15f, 0.05f, 0.10f };
+constexpr float kRrTone[NUM_TRACKS]    = { 0.05f, 0.15f, 0.15f, 0.20f, 0.15f, 0.08f, 0.08f, 0.12f, 0.08f, 0.12f };
+}
+
 //==============================================================================
 void Sequencer::collect (const Block& b, const Pattern& main, const Pattern& fill, std::vector<NoteEvent>& out)
 {
@@ -102,9 +111,11 @@ void DrumEngine::trigger (int track, float velocity, int offset, const TrackSett
     Voice v;
     v.track = track;
     v.s = s;
-    v.rate = std::pow (2.0, (double) ts.tune / 12.0) * s->sampleRate / sr;
     const float vel = std::clamp (velocity, 0.f, 1.f);
-    const float g = std::pow (vel, 1.4f) * ts.level * ts.level * 0.8f;
+    // Round Robin: kein Schlag klingt exakt wie der vorige
+    const float detune = kRrPitch[track] * rnd();
+    v.rate = std::pow (2.0, (double) (ts.tune + detune) / 12.0) * s->sampleRate / sr;
+    const float g = std::pow (vel, 1.4f) * ts.level * ts.level * 0.8f * (1.f + 0.04f * rnd());
     const float pan = std::clamp (ts.pan, -1.f, 1.f);
     const float a = (pan + 1.f) * 0.25f * 3.14159265f;
     v.gl = g * std::cos (a) * 1.41421356f;
@@ -113,6 +124,21 @@ void DrumEngine::trigger (int track, float velocity, int offset, const TrackSett
     {
         const double tau = 0.015 + 1.6 * (double) ts.decay * (double) ts.decay;
         v.envMul = (float) std::exp (-1.0 / (tau * sr));
+    }
+
+    // Klangfarbe: leise Schläge klingen dumpfer (wie bei echten Trommeln), plus leichte Streuung je Schlag
+    {
+        const float darkness = std::clamp ((1.f - vel) * kVelTone[track] + kRrTone[track] * 0.5f * (rnd() + 1.f) * 0.5f, 0.f, 1.f);
+        const float fc = std::min (20000.f * std::pow (900.f / 20000.f, darkness), (float) sr * 0.45f);
+        if (fc < 17000.f && fc < (float) sr * 0.44f)
+        {
+            const float gg = std::tan (3.14159265f * fc / (float) sr);
+            const float k = 1.41421356f;                       // Butterworth, keine Resonanz
+            v.flt = true;
+            v.a1 = 1.f / (1.f + gg * (gg + k));
+            v.a2 = gg * v.a1;
+            v.a3 = gg * v.a2;
+        }
     }
     v.delay = std::max (0, offset);
     voices[(size_t) best] = v;
@@ -145,9 +171,27 @@ void DrumEngine::render (float* const* outL, float* const* outR, int numSamples)
             }
             if (v.delay > 0) { --v.delay; continue; }
 
+            // 4-Punkt-Hermite-Interpolation (weniger Aliasing beim Umstimmen als linear)
             const int i0 = (int) v.pos;
             const float fr = (float) (v.pos - (double) i0);
-            const float x = d[(size_t) i0] + (d[(size_t) i0 + 1] - d[(size_t) i0]) * fr;
+            const size_t n = d.size();
+            const float xm1 = d[(size_t) std::max (0, i0 - 1)];
+            const float x0 = d[(size_t) i0];
+            const float x1 = d[std::min (n - 1, (size_t) i0 + 1)];
+            const float x2 = d[std::min (n - 1, (size_t) i0 + 2)];
+            const float c1 = 0.5f * (x1 - xm1);
+            const float c2 = xm1 - 2.5f * x0 + 2.f * x1 - 0.5f * x2;
+            const float c3 = 0.5f * (x2 - xm1) + 1.5f * (x0 - x1);
+            float x = ((c3 * fr + c2) * fr + c1) * fr + x0;
+            if (v.flt)
+            {
+                const float v3 = x - v.ic2;
+                const float v1 = v.a1 * v.ic1 + v.a2 * v3;
+                const float v2 = v.ic2 + v.a2 * v.ic1 + v.a3 * v3;
+                v.ic1 = 2.f * v1 - v.ic1;
+                v.ic2 = 2.f * v2 - v.ic2;
+                x = v2;
+            }
             const float y = x * v.env * v.fadeGain;
             L[i] += y * v.gl;
             R[i] += y * v.gr;

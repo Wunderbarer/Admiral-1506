@@ -10,6 +10,7 @@
 #include "Core/Generator.h"
 #include "Core/Params.h"
 #include "Core/TrackFx.h"
+#include "Core/MasterBus.h"
 
 class AdmiralProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -74,6 +75,8 @@ public:
     double getCurrentBpm() const { return currentBpm.load(); }
     bool isHostSynced() const { return hostPlaying.load(); }
     float takeMeter (int track) { return engine.takeMeter (track); }
+    float getGainReductionDb() const { return masterBus.getGainReductionDb(); }
+    float takePeakGainReductionDb() { return masterBus.takePeakGainReductionDb(); }
     bool trackHasFx (int track) const { return fxSettings (track).any(); }
     ad::FxSettings fxSettings (int track) const;
     void setAllOuts (bool on);          // alle Spuren auf eigene Ausgänge (bzw. zurück auf MAIN)
@@ -127,6 +130,7 @@ private:
     ad::DrumEngine engine;
     static constexpr int kChunk = 256;                    // Blockteilung für die Spur-Effekte
     std::array<ad::TrackFx, ad::NUM_TRACKS> fx;
+    ad::MasterBus masterBus;
     juce::AudioBuffer<float> trackBuf;                    // 2 Kanäle je Spur
     ad::Sequencer seq;
     std::vector<ad::NoteEvent> events;
@@ -142,7 +146,7 @@ private:
 
     // Samples
     juce::AudioFormatManager formats;
-    std::array<std::array<std::shared_ptr<const ad::SampleData>, ad::NUM_TRACKS>, 2> kits;
+    std::array<std::array<std::shared_ptr<const ad::SampleData>, ad::NUM_TRACKS>, ad::NUM_KITS> kits;
     std::array<std::shared_ptr<const ad::SampleData>, ad::NUM_TRACKS> userSample;
     std::vector<std::shared_ptr<const ad::SampleData>> keepAlive;     // alle je benutzten Samples (Audio-Thread-Sicherheit)
     int shownKit = -1;

@@ -170,6 +170,70 @@ def punch():
     return k
 
 
+# ---------------------------------------------------------------- Kit LINN (80er-Sample-Drumcomputer-Charakter)
+def linnize(x):
+    """Charakter früher Sample-Drumcomputer: begrenzte Bandbreite (ca. 28 kHz Abtastrate)
+    und 8-Bit-Auflösung mit Kompandierung (mu-Law) - das "Korn" in den Ausklängen."""
+    x = lp(normalise(x, 0.95), 11000, 4)
+    mu = 255.0
+    y = np.sign(x) * np.log1p(mu * np.abs(x)) / np.log1p(mu)
+    y = np.round(y * 127.0) / 127.0
+    return np.sign(y) * ((1 + mu) ** np.abs(y) - 1) / mu
+
+
+def room(x, amount=0.12, decay=0.18):
+    """Kurzer Raumanteil, wie er in aufgenommenen Samples steckt."""
+    ir = noise(decay * 3) * env_exp(decay * 3, decay)
+    ir = lp(ir, 6000)
+    r = np.convolve(x, ir)[: len(x)]
+    return x + amount * r / (np.max(np.abs(r)) + 1e-9) * np.max(np.abs(x))
+
+
+def linn():
+    k = {}
+    s = 0.6
+    body = sweep_sine(s, 110, 55, 0.03) * env_exp(s, 0.26)
+    beater = np.sin(2 * np.pi * 1000 * t_axis(s)) * env_exp(s, 0.004) * 0.35 + lp(noise(s), 4000) * env_exp(s, 0.004) * 0.3
+    k["Kick"] = linnize(body + beater)
+
+    s = 0.7
+    tone = 0.7 * np.sin(2 * np.pi * 180 * t_axis(s)) * env_exp(s, 0.09) + 0.4 * np.sin(2 * np.pi * 330 * t_axis(s)) * env_exp(s, 0.06)
+    nz = bp(noise(s), 1500, 8000) * env_exp(s, 0.17)
+    k["Snare"] = linnize(room(tone + 1.0 * nz, 0.25, 0.2))
+
+    s = 0.6
+    n = bp(noise(s), 800, 3000, 3)
+    e = np.zeros(int(SR * s))
+    for i, off in enumerate([0.0, 0.010, 0.020, 0.032]):
+        st = int(off * SR)
+        seg = env_exp(s - off, 0.008 if i < 3 else 0.2)
+        e[st:st + len(seg)] = np.maximum(e[st:st + len(seg)], seg)
+    k["Clap"] = linnize(room(n * e, 0.3, 0.2))
+
+    hatmetal = [f * 3.1 for f in [205.3, 304.4, 369.6, 522.7, 540.0, 800.0]]
+    s = 0.25
+    k["ClosedHat"] = linnize(hp(0.55 * noise(s) + 0.45 * metal(s, hatmetal), 6000) * env_exp(s, 0.045))
+    s = 1.2
+    k["OpenHat"] = linnize(hp(0.6 * noise(s) + 0.4 * metal(s, hatmetal), 5500) * env_exp(s, 0.38))
+
+    s = 1.0
+    k["LowTom"] = linnize(room(sweep_sine(s, 150, 95, 0.12) * env_exp(s, 0.33) + 0.12 * bp(noise(s), 300, 3000) * env_exp(s, 0.015), 0.15))
+    s = 0.9
+    k["HighTom"] = linnize(room(sweep_sine(s, 240, 160, 0.10) * env_exp(s, 0.27) + 0.12 * bp(noise(s), 400, 4000) * env_exp(s, 0.015), 0.15))
+
+    s = 0.15   # Sidestick: holziger Klick
+    t = t_axis(s)
+    k["Rim"] = linnize(0.6 * bp(noise(s), 800, 2500) * env_exp(s, 0.02) + 0.5 * np.sin(2 * np.pi * 1100 * t) * env_exp(s, 0.015)
+                       + 0.45 * np.sin(2 * np.pi * 450 * t) * env_exp(s, 0.03))
+
+    s = 0.6
+    k["Cowbell"] = linnize(bp(0.55 * square(s, 562) + 0.45 * square(s, 845), 450, 5000) * (0.55 * env_exp(s, 0.015) + 0.45 * env_exp(s, 0.22)))
+
+    s = 2.6
+    k["Crash"] = linnize(hp(0.7 * noise(s) + 0.3 * metal(s, [f * 2.6 for f in METAL_808]), 3500) * env_exp(s, 0.85, 0.002))
+    return k
+
+
 def write_wav(path, x):
     x = fade_out(normalise(np.asarray(x, dtype=np.float64)))
     pcm = (np.clip(x, -1, 1) * 32767).astype("<i2")
@@ -183,7 +247,7 @@ def write_wav(path, x):
 def main():
     out = sys.argv[1] if len(sys.argv) > 1 else "Resources/Kits"
     os.makedirs(out, exist_ok=True)
-    for kit_name, fn in (("Analog", analog), ("Punch", punch)):
+    for kit_name, fn in (("Analog", analog), ("Punch", punch), ("Linn", linn)):
         for inst, x in fn().items():
             write_wav(os.path.join(out, f"{kit_name}_{inst}.wav"), x)
             print(f"{kit_name}_{inst}.wav  {len(x) / SR:.2f} s")

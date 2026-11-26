@@ -67,6 +67,7 @@ enum TrackP
     TP_DS_TYPE, TP_DS_DRIVE, TP_DS_TONE, TP_DS_MIX,                        // Distortion
     TP_DL_SYNC, TP_DL_TIME, TP_DL_DIV, TP_DL_FB, TP_DL_MIX, TP_DL_PING,    // Delay (HOST SYNC wie im Diplomat)
     TP_RV_SIZE, TP_RV_DAMP, TP_RV_MIX,                                     // Reverb
+    TP_FLT_HP, TP_FLT_LP, TP_FLT_RES,                                      // Filter (erste Stufe der Kette)
     TP_COUNT
 };
 
@@ -76,6 +77,7 @@ enum GlobalP
     GP_MASTER = TP_COUNT * NUM_TRACKS,
     GP_KIT, GP_GENRE, GP_DENSITY, GP_VARIATION, GP_SWING, GP_HUMANIZE, GP_FILL,
     GP_TEMPO, GP_RUN, GP_MIDIOUT, GP_BARS,
+    GP_GLUE, GP_TAPE,                                                       // Master-Bus
     NUM_PARAMS
 };
 
@@ -98,14 +100,15 @@ inline double delayDivBeats (int i)
     return b[std::clamp (i, 0, 8)];
 }
 
+constexpr int NUM_KITS = 3;
 inline const std::vector<std::string>& kitNames()
 {
-    static const std::vector<std::string> k { "Analog", "Punch" };
+    static const std::vector<std::string> k { "Analog", "Punch", "Linn" };
     return k;
 }
 
 enum class Kind { Float, Choice, Toggle };
-enum class Fmt { Ten, Percent, Pan, Semis, Bpm, Ms, Plain };
+enum class Fmt { Ten, Percent, Pan, Semis, Bpm, Ms, Hz, Plain };
 
 struct ParamSpec
 {
@@ -140,6 +143,10 @@ inline std::string formatValue (const ParamSpec& s, float v)
         case Fmt::Semis:   std::snprintf (b, sizeof b, "%+.1f st", v); break;
         case Fmt::Bpm:     std::snprintf (b, sizeof b, "%.0f BPM", v); break;
         case Fmt::Ms:      std::snprintf (b, sizeof b, "%.0f ms", v); break;
+        case Fmt::Hz:
+            if (v >= 1000.f) std::snprintf (b, sizeof b, "%.2f kHz", v / 1000.f);
+            else             std::snprintf (b, sizeof b, "%.0f Hz", v);
+            break;
         case Fmt::Plain:
         default:           std::snprintf (b, sizeof b, "%.2f", v); break;
     }
@@ -195,6 +202,9 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
             F (tp (t, TP_RV_SIZE),  id + "_rv_size",  nm + " Reverb Size", 0.f, 1.f, 0.5f, Fmt::Ten);
             F (tp (t, TP_RV_DAMP),  id + "_rv_damp",  nm + " Reverb Damping", 0.f, 1.f, 0.5f, Fmt::Ten);
             F (tp (t, TP_RV_MIX),   id + "_rv_mix",   nm + " Reverb Mix", 0.f, 1.f, 0.f, Fmt::Percent);
+            F (tp (t, TP_FLT_HP),   id + "_hp",       nm + " Highpass", 20.f, 2000.f, 20.f, Fmt::Hz, 0.f, 200.f);
+            F (tp (t, TP_FLT_LP),   id + "_lp",       nm + " Lowpass", 200.f, 20000.f, 20000.f, Fmt::Hz, 0.f, 2000.f);
+            F (tp (t, TP_FLT_RES),  id + "_res",      nm + " Filter Resonance", 0.f, 1.f, 0.f, Fmt::Ten);
         }
         F (GP_MASTER,    "master",    "Master", 0.f, 1.f, 0.72f, Fmt::Ten);
         C (GP_KIT,       "kit",       "Kit", kitNames(), 0);
@@ -208,6 +218,8 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
         T (GP_RUN,       "run",       "Internal Run", false);
         T (GP_MIDIOUT,   "midiout",   "MIDI Out", true);
         C (GP_BARS,      "bars",      "MIDI Export Bars", { "1 Bar", "2 Bars", "4 Bars", "8 Bars", "16 Bars" }, 2);
+        F (GP_GLUE,      "glue",      "Master Glue", 0.f, 1.f, 0.3f, Fmt::Ten);
+        F (GP_TAPE,      "tape",      "Master Tape", 0.f, 1.f, 0.25f, Fmt::Ten);
         return a;
     }();
     return table;
