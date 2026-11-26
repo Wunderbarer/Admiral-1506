@@ -111,6 +111,11 @@ AdmiralProcessor::AdmiralProcessor()
                     r->read (&buf, 0, (int) r->lengthInSamples, 0, true, false);
                     s->data.assign (buf.getReadPointer (0), buf.getReadPointer (0) + buf.getNumSamples());
                     kits[(size_t) k][(size_t) t] = s;
+                    // Lautheit (RMS der ersten 150 ms) für den Pegelausgleich des Kit-Designers
+                    const size_t n = std::min (s->data.size(), (size_t) (0.15 * s->sampleRate));
+                    double e = 0.0;
+                    for (size_t i = 0; i < n; ++i) e += (double) s->data[i] * s->data[i];
+                    kitLoudness[(size_t) k][(size_t) t] = (float) (10.0 * std::log10 (e / (double) std::max<size_t> (n, 1) + 1.0e-12));
                 }
             }
         }
@@ -419,8 +424,10 @@ void AdmiralProcessor::clearAllMappings()
 void AdmiralProcessor::timerCallback()
 {
     flushMidiParamChanges();
-    const int kit = (int) std::lround (getValue (GP_KIT));
-    if (kit != shownKit) updateSlots();
+    bool changed = (int) std::lround (getValue (GP_KIT)) != shownKit;
+    for (int t = 0; t < NUM_TRACKS && ! changed; ++t)
+        if (resolvedKit (t) != shownSlots[(size_t) t]) changed = true;
+    if (changed) updateSlots();
 }
 
 //==============================================================================
@@ -429,7 +436,8 @@ void AdmiralProcessor::updateSlots()
     shownKit = juce::jlimit (0, NUM_KITS - 1, (int) std::lround (getValue (GP_KIT)));
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
-        auto s = userSample[(size_t) t] != nullptr ? userSample[(size_t) t] : kits[(size_t) shownKit][(size_t) t];
+        shownSlots[(size_t) t] = resolvedKit (t);
+        auto s = userSample[(size_t) t] != nullptr ? userSample[(size_t) t] : kits[(size_t) shownSlots[(size_t) t]][(size_t) t];
         engine.setSample (t, s.get());
     }
 }
@@ -437,7 +445,7 @@ void AdmiralProcessor::updateSlots()
 juce::String AdmiralProcessor::getSampleName (int track) const
 {
     if (auto& u = userSample[(size_t) track]) return juce::String (u->name);
-    return juce::String (kitNames()[(size_t) juce::jlimit (0, NUM_KITS - 1, shownKit)]).toUpperCase() + " KIT";
+    return juce::String (kitNames()[(size_t) resolvedKit (track)]).toUpperCase() + " KIT";
 }
 
 FxSettings AdmiralProcessor::fxSettings (int t) const
@@ -619,6 +627,111 @@ bool AdmiralProcessor::historyForward()
 }
 
 //==============================================================================
+int AdmiralProcessor::resolvedKit (int t) const
+{
+    const int src = (int) std::lround (getValue (tp (t, TP_SRC)));
+    const int g = juce::jlimit (0, NUM_KITS - 1, (int) std::lround (getValue (GP_KIT)));
+    return src <= 0 ? g : juce::jlimit (0, NUM_KITS - 1, src - 1);
+}
+
+KitSnapshot AdmiralProcessor::captureKit() const
+{
+    KitSnapshot k;
+    k.globalKit = juce::jlimit (0, NUM_KITS - 1, (int) std::lround (getValue (GP_KIT)));
+    k.glue = getValue (GP_GLUE);
+    k.tape = getValue (GP_TAPE);
+    k.character = kitCharacter;
+    for (int t = 0; t < NUM_TRACKS; ++t)
+    {
+        auto& s = k.t[(size_t) t];
+        const auto f = fxSettings (t);
+        s.src = (int) std::lround (getValue (tp (t, TP_SRC)));
+        s.level = getValue (tp (t, TP_LEVEL)); s.pan = getValue (tp (t, TP_PAN));
+        s.tune = getValue (tp (t, TP_TUNE));   s.decay = getValue (tp (t, TP_DECAY));
+        s.hp = f.hp; s.lp = f.lp; s.res = f.res;
+        s.dsType = f.dsType; s.dsDrive = f.dsDrive; s.dsTone = f.dsTone; s.dsMix = f.dsMix;
+        s.dlSync = f.dlSync; s.dlTime = f.dlTimeMs; s.dlDiv = f.dlDiv; s.dlFb = f.dlFb; s.dlMix = f.dlMix; s.dlPing = f.dlPing;
+        s.rvSize = f.rvSize; s.rvDamp = f.rvDamp; s.rvMix = f.rvMix;
+    }
+    return k;
+}
+
+void AdmiralProcessor::applyKit (const KitSnapshot& k)
+{
+    auto set = [this] (int idx, float plain)
+    {
+        if (auto* p = params[(size_t) idx])
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 (plain));
+            p->endChangeGesture();
+        }
+    };
+    set (GP_KIT, (float) k.globalKit);
+    set (GP_GLUE, k.glue);
+    set (GP_TAPE, k.tape);
+    for (int t = 0; t < NUM_TRACKS; ++t)
+    {
+        const auto& s = k.t[(size_t) t];
+        set (tp (t, TP_SRC), (float) s.src);
+        set (tp (t, TP_LEVEL), s.level);   set (tp (t, TP_PAN), s.pan);
+        set (tp (t, TP_TUNE), s.tune);     set (tp (t, TP_DECAY), s.decay);
+        set (tp (t, TP_FLT_HP), s.hp);     set (tp (t, TP_FLT_LP), s.lp);    set (tp (t, TP_FLT_RES), s.res);
+        set (tp (t, TP_DS_TYPE), (float) s.dsType); set (tp (t, TP_DS_DRIVE), s.dsDrive);
+        set (tp (t, TP_DS_TONE), s.dsTone); set (tp (t, TP_DS_MIX), s.dsMix);
+        set (tp (t, TP_DL_SYNC), s.dlSync ? 1.f : 0.f); set (tp (t, TP_DL_TIME), s.dlTime);
+        set (tp (t, TP_DL_DIV), (float) s.dlDiv); set (tp (t, TP_DL_FB), s.dlFb);
+        set (tp (t, TP_DL_MIX), s.dlMix);  set (tp (t, TP_DL_PING), s.dlPing ? 1.f : 0.f);
+        set (tp (t, TP_RV_SIZE), s.rvSize); set (tp (t, TP_RV_DAMP), s.rvDamp); set (tp (t, TP_RV_MIX), s.rvMix);
+    }
+    kitCharacter = k.character;
+    updateSlots();
+}
+
+void AdmiralProcessor::pushKit (const KitSnapshot& k)
+{
+    // Vor dem ersten Würfeln den Ausgangszustand sichern, damit man zurück kann
+    if (kitHistory.empty()) { kitHistory.push_back (captureKit()); kitHistPos = 0; }
+    if (kitHistPos >= 0 && kitHistPos < (int) kitHistory.size() - 1)
+        kitHistory.erase (kitHistory.begin() + kitHistPos + 1, kitHistory.end());
+    kitHistory.push_back (k);
+    if (kitHistory.size() > 32) kitHistory.erase (kitHistory.begin());
+    kitHistPos = (int) kitHistory.size() - 1;
+    applyKit (k);
+}
+
+void AdmiralProcessor::newKit()
+{
+    const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() * 2246822519u + (++seedCounter) * 3266489917u;
+    pushKit (KitDesigner::create ((int) std::lround (getValue (GP_GENRE)), seed, soundLocked, captureKit(), kitLoudness));
+}
+
+void AdmiralProcessor::mutateKit()
+{
+    const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() * 374761393u + (++seedCounter) * 668265263u;
+    pushKit (KitDesigner::mutate (seed, soundLocked, captureKit(), kitLoudness));
+}
+
+bool AdmiralProcessor::kitHistoryBack()
+{
+    if (kitHistPos <= 0) return false;
+    applyKit (kitHistory[(size_t) --kitHistPos]);
+    return true;
+}
+
+bool AdmiralProcessor::kitHistoryForward()
+{
+    if (kitHistPos < 0 || kitHistPos >= (int) kitHistory.size() - 1) return false;
+    applyKit (kitHistory[(size_t) ++kitHistPos]);
+    return true;
+}
+
+juce::String AdmiralProcessor::getKitCharacter() const
+{
+    return juce::isPositiveAndBelow (kitCharacter, (int) characterNames().size()) ? juce::String (characterNames()[(size_t) kitCharacter]) : juce::String();
+}
+
+//==============================================================================
 bool AdmiralProcessor::writeMidiFile (const juce::File& dest, int bars) const
 {
     constexpr int ppqTicks = 960;
@@ -692,9 +805,11 @@ void AdmiralProcessor::getStateInformation (juce::MemoryBlock& dest)
                 s << juce::String (pat[idx (w, t, k)].load(), 3) << " ";
         pt.setProperty (w == 0 ? "main" : "fill", s.trim(), nullptr);
     }
-    juce::String lk;
+    juce::String lk, sl;
     for (bool b : locked) lk << (b ? "1" : "0");
+    for (bool b : soundLocked) sl << (b ? "1" : "0");
     pt.setProperty ("locks", lk, nullptr);
+    pt.setProperty ("soundlocks", sl, nullptr);
     state.appendChild (pt, nullptr);
 
     juce::ValueTree map ("MIDIMAP");
@@ -741,7 +856,13 @@ void AdmiralProcessor::setStateInformation (const void* data, int size)
                     pat[(size_t) (w * NUM_TRACKS * NUM_STEPS + i)].store (juce::jlimit (0.f, 1.f, tok[i].getFloatValue()));
         }
         const auto lk = pt.getProperty ("locks").toString();
-        for (int t = 0; t < NUM_TRACKS; ++t) locked[(size_t) t] = lk.length() > t && lk[t] == '1';
+        const auto sl = pt.getProperty ("soundlocks").toString();
+        for (int t = 0; t < NUM_TRACKS; ++t)
+        {
+            locked[(size_t) t] = lk.length() > t && lk[t] == '1';
+            soundLocked[(size_t) t] = sl.length() > t && sl[t] == '1';
+        }
+        kitHistory.clear(); kitHistPos = -1; kitCharacter = -1;
         patternRevision.fetch_add (1);
         history.clear();
         history.push_back (currentGen());

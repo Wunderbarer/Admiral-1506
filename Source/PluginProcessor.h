@@ -11,6 +11,7 @@
 #include "Core/Params.h"
 #include "Core/TrackFx.h"
 #include "Core/MasterBus.h"
+#include "Core/KitDesigner.h"
 
 class AdmiralProcessor : public juce::AudioProcessor, private juce::Timer
 {
@@ -65,8 +66,21 @@ public:
     bool historyForward();
     int getHistoryPos() const { return histPos; }
     int getHistorySize() const { return (int) history.size(); }
-    bool isLocked (int track) const { return locked[(size_t) track]; }
+    bool isLocked (int track) const { return locked[(size_t) track]; }                 // Pattern-Sperre
     void setLocked (int track, bool on) { locked[(size_t) track] = on; }
+    bool isSoundLocked (int track) const { return soundLocked[(size_t) track]; }       // Sound-Sperre (NEW KIT / MUTATE)
+    void setSoundLocked (int track, bool on) { soundLocked[(size_t) track] = on; }
+
+    // --- Kit-Designer ---
+    void newKit();                      // neues, regelbasiertes Zufalls-Kit
+    void mutateKit();                   // aktuelles Kit leicht variieren
+    bool kitHistoryBack();
+    bool kitHistoryForward();
+    int getKitHistoryPos() const { return kitHistPos; }
+    int getKitHistorySize() const { return (int) kitHistory.size(); }
+    juce::String getKitCharacter() const;   // Charakter des zuletzt erzeugten Kits ("" = von Hand)
+    ad::KitSnapshot captureKit() const;
+    int resolvedKit (int track) const;
 
     // --- Wiedergabe-Anzeige ---
     int getPlayStep() const { return playStep.load(); }        // -1 = steht
@@ -139,7 +153,13 @@ private:
 
     std::array<std::atomic<float>, 2 * ad::NUM_TRACKS * ad::NUM_STEPS> pat;
     std::atomic<int> patternRevision { 0 };
-    std::array<bool, ad::NUM_TRACKS> locked {};
+    std::array<bool, ad::NUM_TRACKS> locked {}, soundLocked {};
+    std::vector<ad::KitSnapshot> kitHistory;
+    int kitHistPos = -1, kitCharacter = -1;
+    ad::KitLoudness kitLoudness {};
+    std::array<int, ad::NUM_TRACKS> shownSlots {};
+    void applyKit (const ad::KitSnapshot& k);
+    void pushKit (const ad::KitSnapshot& k);
     std::vector<ad::GenResult> history;
     int histPos = -1;
     uint32_t seedCounter = 0;

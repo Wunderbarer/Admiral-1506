@@ -79,15 +79,45 @@ int main (int argc, char** argv)
     out.createDirectory();
 
     // Hörbeispiel: plugin_test <Ordner> --demo  (rendert mehrere Genres mit Fills, GLUE und TAPE in eine WAV-Datei)
-    if (argc > 2 && juce::String (argv[2]) == "--demo")
+    const bool kitDemo = argc > 2 && juce::String (argv[2]) == "--kits";
+    if (argc > 2 && (juce::String (argv[2]) == "--demo" || kitDemo))
     {
         std::unique_ptr<AdmiralProcessor> d (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
         const double sr = 48000.0; const int block = 512;
         std::vector<float> L, R;
         auto setP = [&] (int idx, float plain) { auto* q = d->getParam (idx); q->setValueNotifyingHost (q->convertTo0to1 (plain)); };
         const int genres[] = { 0, 1, 3, 4, 5 };
+        if (kitDemo)
+        {
+            // ein Pattern (Synthwave), nacheinander mit sechs gewürfelten Kits
+            setP (ad::GP_GENRE, 0.f); setP (ad::GP_FILL, 0.f);
+            d->generateNew();
+            for (int i = 0; i < 6; ++i)
+            {
+                d->newKit();
+                d->pollParameters();
+                std::printf ("Kit %d: %s  (Kits: ", i + 1, d->getKitCharacter().toRawUTF8());
+                for (int t = 0; t < ad::NUM_TRACKS; ++t) std::printf ("%c", ad::kitNames()[(size_t) d->resolvedKit (t)][0]);
+                std::printf (")\n");
+                FakeHost host; host.bpm = 100.0;
+                d->setPlayHead (&host);
+                d->prepareToPlay (sr, block);
+                juce::AudioBuffer<float> buf (d->getTotalNumOutputChannels(), block);
+                juce::MidiBuffer midi;
+                const int blocks = (int) (2 * 4.0 * 60.0 / host.bpm * sr / block);
+                for (int b = 0; b < blocks; ++b)
+                {
+                    midi.clear();
+                    d->processBlock (buf, midi);
+                    for (int j = 0; j < block; ++j) { L.push_back (buf.getSample (0, j)); R.push_back (buf.getSample (1, j)); }
+                    host.ppq += block / (sr * 60.0 / host.bpm);
+                }
+                d->setPlayHead (nullptr);
+                for (int j = 0; j < (int) (0.6 * sr); ++j) { L.push_back (0.f); R.push_back (0.f); }   // Pause zwischen den Kits
+            }
+        }
         const int kitsUsed[] = { 2, 1, 2, 0, 1 };
-        for (int gi = 0; gi < 5; ++gi)
+        for (int gi = 0; gi < (kitDemo ? 0 : 5); ++gi)
         {
             const int g = genres[gi];
             setP (ad::GP_GENRE, (float) g); setP (ad::GP_KIT, (float) kitsUsed[gi]);
@@ -221,6 +251,36 @@ int main (int argc, char** argv)
         p->setAllOuts (false);
     }
 
+    // Kit-Designer: NEW KIT, MUTATE, Sound-Sperre, Verlauf
+    {
+        const auto kitStart = p->captureKit();
+        p->setSoundLocked (ad::T_SNARE, true);
+        int worst = 0;
+        for (int i = 0; i < 12; ++i)
+        {
+            p->newKit();
+            auto rk = run (*p, 1);
+            if (rk.nan || rk.rms < 0.02 || rk.peak > 1.f) ++worst;
+        }
+        check (worst == 0, "12 Zufalls-Kits: alle hörbar, kein NaN, keine Übersteuerung");
+        const auto kitEnd = p->captureKit();
+        check (std::memcmp (&kitStart.t[ad::T_SNARE], &kitEnd.t[ad::T_SNARE], sizeof (ad::TrackSound)) == 0, "Sound-Sperre: Snare bleibt beim Würfeln gleich");
+        check (p->getKitCharacter().isNotEmpty(), "Charakter des Kits: " + p->getKitCharacter());
+        const auto k1 = p->captureKit();
+        p->mutateKit();
+        const auto k2 = p->captureKit();
+        float maxTune = 0.f;
+        for (int t = 0; t < ad::NUM_TRACKS; ++t) maxTune = std::max (maxTune, std::abs (k1.t[(size_t) t].tune - k2.t[(size_t) t].tune));
+        check (maxTune > 0.f && maxTune <= 0.55f, "MUTATE variiert leicht (max. " + juce::String (maxTune, 2) + " Halbtöne)");
+        p->kitHistoryBack();
+        const auto k3 = p->captureKit();
+        check (std::abs (k3.t[ad::T_KICK].tune - k1.t[ad::T_KICK].tune) < 0.06f, "Kit-Verlauf zurück");
+        for (int i = 0; i < 20; ++i) p->kitHistoryBack();
+        const auto k0 = p->captureKit();
+        check (std::abs (k0.t[ad::T_KICK].level - kitStart.t[ad::T_KICK].level) < 0.01f && k0.globalKit == kitStart.globalKit, "Verlauf führt zum Ausgangskit zurück");
+        p->kitHistoryForward();
+    }
+
     // Zustand speichern / laden (inkl. eigenem Sample und Sperre)
     {
         p->setLocked (3, true);
@@ -235,7 +295,10 @@ int main (int argc, char** argv)
                 for (int k = 0; k < ad::NUM_STEPS; ++k)
                     if (std::abs (p->getStep (w, t, k) - q->getStep (w, t, k)) > 0.002f) same = false;
         check (same, "Pattern nach Laden identisch");
-        check (q->isLocked (3) && ! q->isLocked (2), "Sperren nach Laden erhalten");
+        check (q->isLocked (3) && ! q->isLocked (2) && q->isSoundLocked (ad::T_SNARE) && ! q->isSoundLocked (ad::T_KICK), "Sperren (Pattern + Sound) nach Laden erhalten");
+        bool srcSame = true;
+        for (int t = 0; t < ad::NUM_TRACKS; ++t) if (q->resolvedKit (t) != p->resolvedKit (t)) srcSame = false;
+        check (srcSame, "Klangquelle je Spur nach Laden erhalten");
         check (std::abs (q->getValue (ad::GP_GENRE) - p->getValue (ad::GP_GENRE)) < 0.01f, "Parameter nach Laden erhalten");
         check (std::abs (q->getValue (ad::tp (ad::T_SNARE, ad::TP_RV_MIX)) - 0.3f) < 0.01f, "Spur-Effekte nach Laden erhalten");
     }

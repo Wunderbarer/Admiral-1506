@@ -252,8 +252,14 @@ TrackHeader::TrackHeader (AdmiralProcessor& p, int t, std::function<void (int)> 
     : proc (p), track (t), requestLoad (std::move (onLoadRequest)),
       mute (p, tp (t, TP_MUTE), "MUTE", col::magenta)
 {
-    lock.setOn (proc.isLocked (track));
-    lock.onClick = [this] { proc.setLocked (track, ! proc.isLocked (track)); lock.setOn (proc.isLocked (track)); };
+    lock.onClick = [this]
+    {
+        // LOCK schützt Pattern und Sound; getrennt einstellbar per Rechtsklick
+        const bool any = proc.isLocked (track) || proc.isSoundLocked (track);
+        proc.setLocked (track, ! any);
+        proc.setSoundLocked (track, ! any);
+        update();
+    };
     addAndMakeVisible (lock);
     addAndMakeVisible (mute);
     sampleName = proc.getSampleName (track);
@@ -270,7 +276,11 @@ void TrackHeader::update()
     const float m = proc.takeMeter (track);
     const float nl = juce::jmax (m > 0.001f ? 1.f : 0.f, led * 0.82f);
     if (std::abs (nl - led) > 0.01f) { led = nl < 0.02f ? 0.f : nl; repaint (0, 0, 24, getHeight()); }
-    lock.setOn (proc.isLocked (track));
+    {
+        const bool p = proc.isLocked (track), s = proc.isSoundLocked (track);
+        lock.setOn (p || s);
+        lock.setText (p && s ? "LOCK" : p ? "LOCK P" : s ? "LOCK S" : "LOCK");
+    }
     const auto sn = proc.getSampleName (track);
     const bool mu = proc.getValue (tp (track, TP_MUTE)) > 0.5f;
     const bool fxOn = proc.trackHasFx (track);
@@ -323,15 +333,35 @@ void TrackHeader::mouseDown (const juce::MouseEvent& e)
         m.addItem (2, "Load sample ...");
         m.addItem (3, "Reset to kit sound", proc.hasUserSample (track));
         m.addSeparator();
-        m.addItem (4, proc.isLocked (track) ? "Unlock track" : "Lock track (keep when generating)");
+        m.addItem (4, "Lock pattern  (keep with GENERATE)", true, proc.isLocked (track));
+        m.addItem (5, "Lock sound  (keep with NEW KIT / MUTATE)", true, proc.isSoundLocked (track));
+        m.addSeparator();
+        juce::PopupMenu src;
+        const int cur = (int) std::lround (proc.getValue (tp (track, TP_SRC)));
+        src.addItem (10, "Global kit (KIT buttons)", true, cur == 0);
+        for (int k = 0; k < NUM_KITS; ++k)
+            src.addItem (11 + k, juce::String (kitNames()[(size_t) k]) + " kit", true, cur == k + 1);
+        m.addSubMenu ("Sound source", src, ! proc.hasUserSample (track));
         juce::Component::SafePointer<TrackHeader> sp (this);
         m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [sp] (int r)
         {
             if (sp == nullptr) return;
-            if (r == 1) sp->proc.previewTrack (sp->track);
-            else if (r == 2 && sp->requestLoad) sp->requestLoad (sp->track);
-            else if (r == 3) sp->proc.resetSample (sp->track);
-            else if (r == 4) sp->proc.setLocked (sp->track, ! sp->proc.isLocked (sp->track));
+            auto& pr = sp->proc;
+            const int t = sp->track;
+            if (r == 1) pr.previewTrack (t);
+            else if (r == 2 && sp->requestLoad) sp->requestLoad (t);
+            else if (r == 3) pr.resetSample (t);
+            else if (r == 4) pr.setLocked (t, ! pr.isLocked (t));
+            else if (r == 5) pr.setSoundLocked (t, ! pr.isSoundLocked (t));
+            else if (r >= 10 && r < 11 + NUM_KITS)
+            {
+                auto* p = pr.getParam (tp (t, TP_SRC));
+                p->beginChangeGesture();
+                p->setValueNotifyingHost (p->convertTo0to1 ((float) (r - 10)));
+                p->endChangeGesture();
+                pr.pollParameters();
+                pr.previewTrack (t);
+            }
             sp->update();
         });
         return;
@@ -514,6 +544,20 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         auto* fill = add<ChoiceButtons> (proc, GP_FILL, juce::StringArray { "Off", "4 Bars", "8 Bars", "16 Bars" }, "FILL EVERY");
         fill->setBounds (576, kGenY + 32, 110, fill->preferredHeight());
         learners.push_back (fill);
+
+        // Kit-Designer
+        newKitBtn.getProperties().set ("fontSize", 13.0);
+        newKitBtn.onClick = [this] { proc.newKit(); showNotice ("NEW KIT: " + proc.getKitCharacter().toUpperCase()); };
+        mutateBtn.onClick = [this] { proc.mutateKit(); showNotice ("KIT MUTATED"); };
+        kitBack.onClick = [this] { proc.kitHistoryBack(); };
+        kitFwd.onClick  = [this] { proc.kitHistoryForward(); };
+        newKitBtn.setTooltip ("New random kit (rule-based, follows the genre). Sound-locked tracks stay.");
+        mutateBtn.setTooltip ("Slightly vary the current kit");
+        for (auto* b : { &newKitBtn, &mutateBtn, &kitBack, &kitFwd }) addAndMakeVisible (*b);
+        newKitBtn.setBounds (702, kGenY + 50, 138, 30);
+        mutateBtn.setBounds (702, kGenY + 84, 138, 24);
+        kitBack.setBounds (702, kGenY + 112, 34, 22);
+        kitFwd.setBounds (806, kGenY + 112, 34, 22);
     }
 
     // ---- Bereich GROOVE ----
@@ -804,8 +848,12 @@ void MainPanel::paint (juce::Graphics& g)
     g.setFont (CyberLook::labelFont (10.f));
     g.drawText ("HISTORY " + histText, 262, kGenY + 68, 84, 26, juce::Justification::centred, false);
     g.setFont (CyberLook::labelFont (9.5f, false));
-    g.drawFittedText ("LOCKED TRACKS STAY UNCHANGED.\nRIGHT-CLICK A STEP: VELOCITY.\nSHIFT-CLICK: ACCENT.  WHEEL: FINE.",
-                      700, kGenY + 36, 140, 90, juce::Justification::topLeft, 6, 0.9f);
+    drawGroupLabel (g, 702, kGenY + 28, 138, "KIT DESIGNER");
+    g.setColour (col::iceDim);
+    g.setFont (CyberLook::labelFont (9.5f));
+    g.drawText ("KIT " + kitHistText, 738, kGenY + 112, 66, 22, juce::Justification::centred, false);
+    g.setColour (col::edge.withAlpha (0.8f));
+    g.fillRect (692, kGenY + 34, 1, kGenH - 44);
 
     // Groove: Positionsanzeige
     {
@@ -827,7 +875,7 @@ void MainPanel::paint (juce::Graphics& g)
     // Fußzeile
     g.setColour (col::iceDim);
     g.setFont (CyberLook::labelFont (10.5f, false));
-    g.drawText ("CLICK TRACK: SELECT + PREVIEW  |  RIGHT-CLICK: LOAD SAMPLE / MIDI LEARN  |  DROP AUDIO ON A TRACK",
+    g.drawText ("CLICK TRACK: SELECT  |  RIGHT-CLICK TRACK: SAMPLE, LOCKS, SOURCE  |  STEP: SHIFT = ACCENT, RIGHT = VELOCITY",
                 36, kFootY, 640, 26, juce::Justification::centredLeft, false);
     g.setColour (col::magenta);
     g.setFont (CyberLook::labelFont (11.f));
@@ -918,10 +966,11 @@ void MainPanel::startLoadSample (int track)
 
 void MainPanel::updateCaption()
 {
-    const juce::String which = matrix != nullptr && matrix->getEditTarget() == 1 ? "EDITING: FILL BAR" : "EDITING: MAIN BAR";
+    const juce::String which = matrix != nullptr && matrix->getEditTarget() == 1 ? "FILL BAR" : "MAIN BAR";
     const int fe = fillEveryBars ((int) std::lround (proc.getValue (GP_FILL)));
     const juce::String c = which + "   |   " + (fe > 0 ? "FILL EVERY " + juce::String (fe) + " BARS" : juce::String ("FILL OFF"))
-                         + "   |   " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (proc.getValue (GP_GENRE)))]).toUpperCase();
+                         + "   |   " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (proc.getValue (GP_GENRE)))]).toUpperCase()
+                         + (proc.getKitCharacter().isNotEmpty() ? "   |   KIT: " + proc.getKitCharacter().toUpperCase() : juce::String());
     if (c != caption) { caption = c; repaint (842, 65, 452, 14); }
 }
 
@@ -947,6 +996,13 @@ void MainPanel::timerCallback()
     const juce::String ht = juce::String (proc.getHistoryPos() + 1) + " / " + juce::String (proc.getHistorySize());
     if (ht != histText) { histText = ht; repaint (262, kGenY + 68, 84, 26); }
     histBack.setEnabled (proc.getHistoryPos() > 0);
+    {
+        const juce::String kt = proc.getKitHistorySize() == 0 ? juce::String ("- / -")
+                              : juce::String (proc.getKitHistoryPos() + 1) + " / " + juce::String (proc.getKitHistorySize());
+        if (kt != kitHistText) { kitHistText = kt; repaint (738, kGenY + 112, 66, 22); }
+        kitBack.setEnabled (proc.getKitHistoryPos() > 0);
+        kitFwd.setEnabled (proc.getKitHistoryPos() < proc.getKitHistorySize() - 1);
+    }
     histFwd.setEnabled (proc.getHistoryPos() < proc.getHistorySize() - 1);
 
     const int st = proc.getPlayStep();

@@ -12,6 +12,7 @@ class LedPill : public juce::Component
 public:
     explicit LedPill (juce::String t, juce::Colour onColour = col::cyan) : text (std::move (t)), colOn (onColour) {}
     void setOn (bool b) { if (b != on) { on = b; repaint(); } }
+    void setText (const juce::String& t) { if (t != text) { text = t; repaint(); } }
     bool isOn() const { return on; }
     std::function<void()> onClick;
 
@@ -183,6 +184,9 @@ private:
     size_t fxGroupIndex = 0;
     float shownGr = 0.f;
     juce::TextButton resetFxBtn { "RESET FX" };
+    juce::TextButton newKitBtn { "NEW KIT" }, mutateBtn { "MUTATE" }, kitBack { "<" }, kitFwd { ">" };
+    juce::String kitHistText;
+    juce::TooltipWindow tooltips { this, 700 };
 
     juce::ComboBox genreBox, barsBox;
     std::unique_ptr<juce::ComboBoxParameterAttachment> genreAtt, barsAtt;

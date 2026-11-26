@@ -68,6 +68,7 @@ enum TrackP
     TP_DL_SYNC, TP_DL_TIME, TP_DL_DIV, TP_DL_FB, TP_DL_MIX, TP_DL_PING,    // Delay (HOST SYNC wie im Diplomat)
     TP_RV_SIZE, TP_RV_DAMP, TP_RV_MIX,                                     // Reverb
     TP_FLT_HP, TP_FLT_LP, TP_FLT_RES,                                      // Filter (erste Stufe der Kette)
+    TP_SRC,                                                                 // Klangquelle: 0 = globales Kit, 1.. = bestimmtes Kit
     TP_COUNT
 };
 
@@ -205,6 +206,11 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
             F (tp (t, TP_FLT_HP),   id + "_hp",       nm + " Highpass", 20.f, 2000.f, 20.f, Fmt::Hz, 0.f, 200.f);
             F (tp (t, TP_FLT_LP),   id + "_lp",       nm + " Lowpass", 200.f, 20000.f, 20000.f, Fmt::Hz, 0.f, 2000.f);
             F (tp (t, TP_FLT_RES),  id + "_res",      nm + " Filter Resonance", 0.f, 1.f, 0.f, Fmt::Ten);
+            {
+                std::vector<std::string> src { "Global Kit" };
+                for (auto& k : kitNames()) src.push_back (k);
+                C (tp (t, TP_SRC), id + "_src", nm + " Sound Source", src, 0);
+            }
         }
         F (GP_MASTER,    "master",    "Master", 0.f, 1.f, 0.72f, Fmt::Ten);
         C (GP_KIT,       "kit",       "Kit", kitNames(), 0);

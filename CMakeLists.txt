@@ -71,7 +71,8 @@ target_sources(Admiral1506 PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/Core/Generator.cpp
-    Source/Core/DrumEngine.cpp)
+    Source/Core/DrumEngine.cpp
+    Source/Core/KitDesigner.cpp)
 
 target_include_directories(Admiral1506 PRIVATE Source)
 
@@ -98,7 +99,7 @@ target_link_libraries(Admiral1506
         juce::juce_recommended_warning_flags)
 
 if(ADMIRAL_BUILD_TESTS)
-    add_executable(core_test tests/core_test.cpp Source/Core/Generator.cpp Source/Core/DrumEngine.cpp)
+    add_executable(core_test tests/core_test.cpp Source/Core/Generator.cpp Source/Core/DrumEngine.cpp Source/Core/KitDesigner.cpp)
     target_include_directories(core_test PRIVATE Source)
     if(MSVC)
         target_compile_options(core_test PRIVATE /utf-8)

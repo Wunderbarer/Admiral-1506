@@ -36,11 +36,12 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 | Bereich | Funktion |
 |---|---|
 | **GENERATOR** | Genre wählen, **GENERATE** drücken. `<` / `>` blättern durch die letzten 32 erzeugten Pattern. **NEW FILL** erzeugt nur den Fill-Takt neu. |
+| **KIT DESIGNER** | **NEW KIT** würfelt ein neues Kit nach Regeln: das Genre bestimmt einen Charakter (*Dry & Tight, Big 80s Room, Lo-Fi, Industrial, Clean Modern*), daraus werden Kit-Mischung, Stimmung, Decay, Panorama, Filter, Effekte sowie GLUE/TAPE abgeleitet – mit automatischem Pegelausgleich. **MUTATE** variiert das aktuelle Kit nur leicht. `<` / `>` blättern durch die letzten 32 Kits (der Ausgangszustand bleibt erreichbar). Nie verändert: Mute, OUT, Master, Tempo, MIDI und eigene Samples. |
 | DENSITY | wie viele der optionalen Schläge gespielt werden (wenig = minimal, viel = dicht, 16tel-Hats) |
 | VARIATION | zusätzliche Zufallsschläge, Ghost-Notes, Anschlags-Streuung, längere Fills |
 | FILL EVERY | Fill-Takt alle 4 / 8 / 16 Takte, danach automatisch ein Crash |
 | **PATTERN** | 10 Spuren × 16 Schritte. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
-| LOCK | gesperrte Spuren bleiben beim Generieren unverändert (z. B. eigene Kick behalten, Hats neu würfeln) |
+| LOCK | sperrt Pattern **und** Sound der Spur. Per Rechtsklick getrennt: *Lock pattern* (bleibt bei GENERATE) und *Lock sound* (bleibt bei NEW KIT / MUTATE) – Anzeige dann LOCK P bzw. LOCK S |
 | MUTE / OUT | Spur stumm / auf eigenen Ausgang legen |
 | TUNE · DECAY · PAN · LEVEL | Stimmung (±12 Halbtöne), Ausklang, Panorama, Lautstärke je Spur |
 | MAIN BAR / FILL BAR | welcher Takt im Raster bearbeitet wird (Fill wird magenta dargestellt) |
@@ -51,7 +52,7 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 **Klang-Engine:** leise Schläge klingen automatisch dumpfer (Klangfarbe folgt der Anschlagstärke), jeder Schlag variiert minimal
 in Tonhöhe und Klangfarbe (Round Robin, kein „Maschinengewehr“-Effekt), 4-Punkt-Interpolation beim Umstimmen.
 
-**Spur anklicken** = auswählen und vorhören · **Doppelklick / Rechtsklick › Load sample** = eigene Audiodatei
+**Spur anklicken** = auswählen und vorhören · **Rechtsklick › Sound source** = Klang einer Spur aus einem bestimmten Kit (z. B. Linn-Snare im Analog-Kit) · **Doppelklick / Rechtsklick › Load sample** = eigene Audiodatei
 (WAV, AIFF, FLAC, OGG, MP3; max. 10 s) · Audiodatei **auf eine Spur ziehen** geht auch.
 Eigene Samples werden im Projekt gespeichert.
 

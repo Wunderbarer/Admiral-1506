@@ -13,6 +13,7 @@
 #include <vector>
 #include "Core/DrumEngine.h"
 #include "Core/Generator.h"
+#include "Core/KitDesigner.h"
 
 using namespace ad;
 
@@ -239,6 +240,63 @@ int main (int argc, char** argv)
         for (size_t i = 0; i < a.size(); ++i) { diff += (double) (a[i] - b[i]) * (a[i] - b[i]); en += (double) a[i] * a[i]; }
         std::printf ("Round Robin: Unterschied zweier gleicher Schläge %.1f %%\n", 100.0 * std::sqrt (diff / en));
         if (diff / en < 1e-4) fail ("Round Robin wirkt nicht");
+    }
+
+    // Kit-Designer: Regeln, Sperren, Pegelausgleich
+    {
+        KitLoudness loud {};
+        for (int k = 0; k < NUM_KITS; ++k)
+            for (int t = 0; t < NUM_TRACKS; ++t)
+            {
+                const auto& d = kit[k][(size_t) t]->data;
+                const size_t n = std::min (d.size(), (size_t) (0.15 * kit[k][(size_t) t]->sampleRate));
+                double e = 0; for (size_t i = 0; i < n; ++i) e += (double) d[i] * d[i];
+                loud[(size_t) k][(size_t) t] = (float) (10.0 * std::log10 (e / (double) std::max<size_t> (n, 1) + 1e-12));
+            }
+        int bad = 0, chars[5] = {}, mixed = 0;
+        double maxDev = 0;
+        KitSnapshot base;
+        for (int t = 0; t < NUM_TRACKS; ++t) base.t[(size_t) t].level = tracks()[(size_t) t].level;
+        std::array<bool, NUM_TRACKS> none {};
+        for (int g = 0; g < 7; ++g)
+            for (uint32_t sd = 1; sd <= 200; ++sd)
+            {
+                const auto k = KitDesigner::create (g, sd * 7919u + (uint32_t) g, none, base, loud);
+                ++chars[k.character];
+                bool mix = false;
+                for (int t = 0; t < NUM_TRACKS; ++t)
+                {
+                    const auto& x = k.t[(size_t) t];
+                    if (x.src != 0) mix = true;
+                    if (x.tune < -12.f || x.tune > 12.f || x.decay < 0.f || x.decay > 1.f || std::abs (x.pan) > 1.f || x.level < 0.15f || x.level > 1.f
+                        || x.hp < 20.f || x.hp > 2000.f || x.lp < 200.f || x.lp > 20000.f || x.dsMix > 1.f || x.rvMix > 1.f || x.dlMix > 1.f || x.dlFb > 0.9f) ++bad;
+                    // wirksame Lautheit gegenüber dem Grundkit
+                    const int kk = KitDesigner::resolvedKit (k, t);
+                    const double eff = loud[(size_t) kk][(size_t) t] + 20.0 * std::log10 (x.level * x.level) + x.dsMix * x.dsDrive * 4.0 + x.rvMix * 3.0 + x.dlMix * 2.0;
+                    const double ref = loud[0][(size_t) t] + 20.0 * std::log10 (tracks()[(size_t) t].level * tracks()[(size_t) t].level);
+                    if (x.level > 0.151f && x.level < 0.999f) maxDev = std::max (maxDev, std::abs (eff - ref));
+                }
+                if (mix) ++mixed;
+                if (k.t[T_KICK].dlMix > 0.f || k.t[T_KICK].pan != 0.f) ++bad;
+                if (KitDesigner::resolvedKit (k, T_CHAT) != KitDesigner::resolvedKit (k, T_OHAT) || k.t[T_CHAT].tune != k.t[T_OHAT].tune) ++bad;
+                if (KitDesigner::resolvedKit (k, T_LTOM) != KitDesigner::resolvedKit (k, T_HTOM) || k.t[T_LTOM].pan >= 0.f || k.t[T_HTOM].pan <= 0.f) ++bad;
+            }
+        std::printf ("\nKit-Designer: 1400 Kits, Charaktere %d/%d/%d/%d/%d, gemischte Kits %d, Regelverstöße %d, max. Pegelabweichung %.1f dB\n",
+                     chars[0], chars[1], chars[2], chars[3], chars[4], mixed, bad, maxDev);
+        if (bad > 0) fail ("Kit-Designer verletzt Regeln");
+        if (maxDev > 2.5) fail ("Pegelausgleich ungenau");
+        if (mixed < 300) fail ("Kits werden zu selten gemischt");
+
+        // Sperre: gesperrte Snare bleibt exakt gleich, auch bei MUTATE
+        std::array<bool, NUM_TRACKS> lk {}; lk[T_SNARE] = true;
+        auto k1 = KitDesigner::create (0, 42, none, base, loud);
+        auto k2 = KitDesigner::create (1, 43, lk, k1, loud);
+        auto k3 = KitDesigner::mutate (44, lk, k2, loud);
+        if (std::memcmp (&k1.t[T_SNARE], &k3.t[T_SNARE], sizeof (TrackSound)) != 0) fail ("Sound-Sperre wirkt nicht");
+        // MUTATE bleibt in der Nähe
+        float maxTune = 0;
+        for (int t = 0; t < NUM_TRACKS; ++t) maxTune = std::max (maxTune, std::abs (k3.t[(size_t) t].tune - k2.t[(size_t) t].tune));
+        if (maxTune > 0.55f) fail ("MUTATE verändert zu stark");
     }
 
     std::printf ("\n%s (%d Fehler)\n", failures == 0 ? "ALLE TESTS BESTANDEN" : "TESTS FEHLGESCHLAGEN", failures);
