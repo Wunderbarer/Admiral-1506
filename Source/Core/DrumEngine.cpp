@@ -14,9 +14,10 @@ constexpr float kRrTone[NUM_TRACKS]    = { 0.05f, 0.15f, 0.15f, 0.20f, 0.15f, 0.
 }
 
 //==============================================================================
-void Sequencer::collect (const Block& b, const Pattern& main, const Pattern& fill, std::vector<NoteEvent>& out)
+void Sequencer::collect (const Block& b, const Pattern& pat, std::vector<NoteEvent>& out)
 {
     if (b.numSamples <= 0 || b.bpm <= 0.0) return;
+    const int len = std::clamp (b.length, 1, MAX_STEPS);
     const double samplesPerPpq = b.sampleRate * 60.0 / b.bpm;
     const double p0 = b.ppqStart;
     const double p1 = p0 + (double) b.numSamples / samplesPerPpq;
@@ -26,21 +27,21 @@ void Sequencer::collect (const Block& b, const Pattern& main, const Pattern& fil
     const long long nLast = (long long) std::floor (p1 * 4.0) + 1;
     for (long long n = nFirst; n <= nLast; ++n)
     {
-        const long long bar = n / NUM_STEPS;
-        const int step = (int) (n % NUM_STEPS);
-        const double t = (double) bar * 4.0 + stepOffsetPpq (step, b.swing);
+        const double t = stepTimePpq (n, b.swing);
         if (t < p0 || t >= p1) continue;
 
-        const bool isFill = isFillBar (bar, b.fillEvery);
-        const Pattern& pat = isFill ? fill : main;
+        const long long cycle = n / len;
+        const int step = (int) (n % len);
+        const bool isFill = isFillCycle (cycle, b.fillEvery);
         const int baseOffset = (int) std::floor ((t - p0) * samplesPerPpq);
         lastStep_ = step;
         lastFill_ = isFill;
+        lastCycle_ = cycle;
 
         for (int tr = 0; tr < NUM_TRACKS; ++tr)
         {
-            float vel = pat.v[(size_t) tr][(size_t) step];
-            if (tr == T_CRASH && step == 0 && crashAfterFill (bar, b.fillEvery))
+            float vel = pat.value (tr, step, len, isFill);
+            if (tr == T_CRASH && step == 0 && crashAfterFill (cycle, b.fillEvery))
                 vel = std::max (vel, 0.9f);
             if (vel <= 0.f) continue;
 

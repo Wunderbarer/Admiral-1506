@@ -40,21 +40,24 @@ public:
         double sampleRate = 44100.0;
         int numSamples = 0;
         float swing = 0.f, humanize = 0.f;
-        int fillEvery = 0;
+        int fillEvery = 0;       // Fill in jedem n-ten Durchlauf (0 = aus)
+        int length = MAX_STEPS;  // Pattern-Länge in Sechzehnteln
     };
 
-    // Ereignisse für den Block anhängen. main/fill: Haupt- und Fill-Takt.
-    void collect (const Block& b, const Pattern& main, const Pattern& fill, std::vector<NoteEvent>& out);
+    // Ereignisse für den Block anhängen
+    void collect (const Block& b, const Pattern& pat, std::vector<NoteEvent>& out);
 
-    int lastStep() const { return lastStep_; }        // zuletzt gespielter Schritt (0..15), -1 = keiner
+    int lastStep() const { return lastStep_; }        // zuletzt gespielter Schritt im Pattern, -1 = keiner
     bool lastWasFill() const { return lastFill_; }
-    void reset() { lastStep_ = -1; lastFill_ = false; }
+    long long lastCycle() const { return lastCycle_; }
+    void reset() { lastStep_ = -1; lastFill_ = false; lastCycle_ = 0; }
 
 private:
     uint32_t rng = 0x1506u;
     float rand01() { rng ^= rng << 13; rng ^= rng >> 17; rng ^= rng << 5; return (float) (rng >> 8) / 16777216.f; }
     int lastStep_ = -1;
     bool lastFill_ = false;
+    long long lastCycle_ = 0;
 };
 
 class DrumEngine

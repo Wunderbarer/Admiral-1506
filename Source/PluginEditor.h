@@ -39,19 +39,30 @@ private:
 };
 
 //==============================================================================
-// Schrittraster: 10 Spuren x 16 Schritte
+// Schrittraster: 10 Spuren x 16 sichtbare Schritte, bis zu 3 Seiten (1-16, 17-32, 33-48)
 class StepMatrix : public juce::Component
 {
 public:
-    static constexpr int kHeader = 20, kRowH = 44, kCellW = 40, kPitch = 42, kGroupGap = 6;
-    static int colX (int k) { return k * kPitch + (k / 4) * kGroupGap; }
-    static int width() { return colX (ad::NUM_STEPS - 1) + kCellW + 2; }
+    static constexpr int kHeader = 20, kRowH = 42, kCellW = 40, kPitch = 42, kGroupGap = 6, kCols = 16;
+    static int colX (int i) { return i * kPitch + (i / 4) * kGroupGap; }
+    static int width() { return colX (kCols - 1) + kCellW + 2; }
     static int height() { return kHeader + ad::NUM_TRACKS * kRowH; }
 
-    explicit StepMatrix (AdmiralProcessor& p) : proc (p) {}
+    explicit StepMatrix (AdmiralProcessor& p) : proc (p) { cache = proc.getPattern(); }
     void setEditTarget (int which) { if (which != target) { target = which; repaint(); } }
     int getEditTarget() const { return target; }
     void update();                     // aus dem Timer: Wiedergabe-Position / Änderungen
+
+    // Seiten
+    int getPage() const { return page; }
+    void setPage (int p);
+    int numPages() const { return (len + kCols - 1) / kCols; }
+    bool follow = true;                // Seite folgt der Wiedergabe
+    std::function<void()> onPageChanged;
+
+    const ad::Pattern& cached() const { return cache; }
+    int length() const { return len; }
+    int playingStep() const { return playing; }
 
     void paint (juce::Graphics&) override;
     void mouseDown (const juce::MouseEvent&) override;
@@ -61,14 +72,45 @@ public:
 private:
     bool cellAt (juce::Point<int> p, int& track, int& step) const;
     void showVelocityMenu (int track, int step);
+    float cell (int t, int k) const { return cache.value (t, k, len, target == 1); }
 
     AdmiralProcessor& proc;
-    int target = 0;                    // 0 = Haupt-Takt, 1 = Fill-Takt
+    ad::Pattern cache;
+    int len = ad::MAX_STEPS, page = 0;
+    int target = 0;                    // 0 = normaler Durchlauf, 1 = Fill-Durchlauf
     int playing = -1;
     bool playingFill = false;
     int seenRevision = -1, muteMask = -1;
     float paintValue = 0.f;
     int lastPaintT = -1, lastPaintK = -1;
+};
+
+//==============================================================================
+// Seitenwahl mit Mini-Vorschau des ganzen Patterns
+class PageSelector : public juce::Component
+{
+public:
+    explicit PageSelector (StepMatrix& m) : matrix (m) {}
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+private:
+    StepMatrix& matrix;
+};
+
+//==============================================================================
+// Waagerechte Auswahltaster für einen Auswahl-Parameter (z. B. LENGTH 16 / 24 / 32 / 48)
+class HChoice : public juce::Component
+{
+public:
+    HChoice (AdmiralProcessor& p, int paramIdx, juce::StringArray items);
+    void paint (juce::Graphics&) override;
+    void mouseDown (const juce::MouseEvent&) override;
+
+private:
+    juce::StringArray items;
+    int current = 0;
+    juce::ParameterAttachment attach;
 };
 
 //==============================================================================
@@ -174,6 +216,8 @@ private:
     juce::OwnedArray<juce::Component> owned;
     std::vector<LearnWidget*> learners;
     StepMatrix* matrix = nullptr;
+    PageSelector* pages = nullptr;
+    LedPill* followPill = nullptr;
     std::array<TrackHeader*, ad::NUM_TRACKS> headers {};
     MidiDragTile* dragTile = nullptr;
     int selTrack = 0;
@@ -191,7 +235,7 @@ private:
     juce::ComboBox genreBox, barsBox;
     std::unique_ptr<juce::ComboBoxParameterAttachment> genreAtt, barsAtt;
     juce::TextButton generateBtn { "GENERATE" }, histBack { "<" }, histFwd { ">" }, newFillBtn { "NEW FILL" };
-    juce::TextButton tabMain { "MAIN BAR" }, tabFill { "FILL BAR" }, copyBtn { "MAIN > FILL" }, clearBtn { "CLEAR BAR" };
+    juce::TextButton tabMain { "MAIN" }, tabFill { "FILL" }, copyBtn { "MAIN > FILL" }, clearBtn { "CLEAR" };
     juce::TextButton saveMidiBtn { "SAVE MIDI ..." }, learnBtn { "MIDI LEARN: OFF" };
 
     std::unique_ptr<juce::FileChooser> chooser;

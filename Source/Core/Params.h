@@ -10,7 +10,9 @@
 namespace ad
 {
 constexpr int NUM_TRACKS = 10;
-constexpr int NUM_STEPS = 16;
+constexpr int NUM_STEPS = 16;     // Schritte pro Takt (Genre-Vorlagen)
+constexpr int MAX_STEPS = 48;     // maximale Pattern-Länge (3 Takte)
+constexpr int END_STEPS = 12;     // Variations-Ebenen (Ending / Fill): letztes Viertel von 48
 
 // Spuren in fester Reihenfolge
 enum Track { T_KICK, T_SNARE, T_CLAP, T_CHAT, T_OHAT, T_LTOM, T_HTOM, T_RIM, T_COWBELL, T_CRASH };
@@ -79,6 +81,7 @@ enum GlobalP
     GP_KIT, GP_GENRE, GP_DENSITY, GP_VARIATION, GP_SWING, GP_HUMANIZE, GP_FILL,
     GP_TEMPO, GP_RUN, GP_MIDIOUT, GP_BARS,
     GP_GLUE, GP_TAPE,                                                       // Master-Bus
+    GP_LENGTH,                                                              // Pattern-Länge 16/24/32/48
     NUM_PARAMS
 };
 
@@ -219,18 +222,21 @@ inline const std::array<ParamSpec, NUM_PARAMS>& specs()
         F (GP_VARIATION, "variation", "Variation", 0.f, 1.f, 0.35f, Fmt::Percent);
         F (GP_SWING,     "swing",     "Swing", 0.f, 1.f, 0.f, Fmt::Percent);
         F (GP_HUMANIZE,  "humanize",  "Humanize", 0.f, 1.f, 0.15f, Fmt::Percent);
-        C (GP_FILL,      "fill",      "Fill Every", { "Off", "4 Bars", "8 Bars", "16 Bars" }, 1);
+        C (GP_FILL,      "fill",      "Fill Every", { "Off", "Every 2", "Every 4", "Every 8" }, 2);
         F (GP_TEMPO,     "tempo",     "Internal Tempo", 60.f, 200.f, 120.f, Fmt::Bpm, 1.f);
         T (GP_RUN,       "run",       "Internal Run", false);
         T (GP_MIDIOUT,   "midiout",   "MIDI Out", true);
         C (GP_BARS,      "bars",      "MIDI Export Bars", { "1 Bar", "2 Bars", "4 Bars", "8 Bars", "16 Bars" }, 2);
         F (GP_GLUE,      "glue",      "Master Glue", 0.f, 1.f, 0.3f, Fmt::Ten);
         F (GP_TAPE,      "tape",      "Master Tape", 0.f, 1.f, 0.25f, Fmt::Ten);
+        C (GP_LENGTH,    "length",    "Pattern Length", { "16 Steps", "24 Steps", "32 Steps", "48 Steps" }, 3);
         return a;
     }();
     return table;
 }
 
-inline int fillEveryBars (int choice) { static const int v[] = { 0, 4, 8, 16 }; return v[std::clamp (choice, 0, 3)]; }
+// Fill: jeder 2./4./8. Durchlauf des Patterns
+inline int fillEveryCycles (int choice) { static const int v[] = { 0, 2, 4, 8 }; return v[std::clamp (choice, 0, 3)]; }
+inline int patternLength (int choice) { static const int v[] = { 16, 24, 32, 48 }; return v[std::clamp (choice, 0, 3)]; }
 inline int exportBars (int choice)    { static const int v[] = { 1, 2, 4, 8, 16 }; return v[std::clamp (choice, 0, 4)]; }
 } // namespace ad

@@ -61,15 +61,18 @@ static void writeWav (const std::string& path, const std::vector<float>& l, cons
         for (float x : { l[i], r[i] }) { const int16_t s = (int16_t) std::lround (std::fmax (-1.f, std::fmin (1.f, x)) * 32767.f); f.write ((const char*) &s, 2); }
 }
 
-static void printPattern (const Pattern& p, const char* title)
+static void printPattern (const Pattern& p, int len, bool fill, const char* title)
 {
-    std::printf ("  %s\n", title);
+    std::printf ("  %s (%d Schritte, | = Variations-Zone)\n", title, len);
+    const int zone = len - Pattern::zoneFor (len, fill);
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
         std::printf ("    %-8s ", tracks()[(size_t) t].name);
-        for (int k = 0; k < NUM_STEPS; ++k)
+        for (int k = 0; k < len; ++k)
         {
-            const float v = p.v[(size_t) t][(size_t) k];
+            if (k == zone) std::printf ("|");
+            else if (k > 0 && k % 16 == 0) std::printf (" ");
+            const float v = p.value (t, k, len, fill);
             std::printf ("%c", v <= 0.f ? (k % 4 == 0 ? ':' : '.') : v >= 0.95f ? 'X' : v >= 0.6f ? 'x' : 'o');
         }
         std::printf ("\n");
@@ -101,114 +104,139 @@ int main (int argc, char** argv)
     {
         GenSettings gs; gs.genre = genre; gs.density = 0.5f; gs.variation = 0.4f;
         std::array<bool, NUM_TRACKS> locks {};
-        const GenResult g = Generator::generate (gs, 1234u + (uint32_t) genre, locks, {});
+        const Pattern g = Generator::generate (gs, 1234u + (uint32_t) genre, locks, Pattern());
         std::printf ("\n== %s (%d BPM) ==\n", genreNames()[(size_t) genre].c_str(), Generator::suggestedBpm (genre));
-        printPattern (g.main, "Haupt-Takt");
-        printPattern (g.fill, "Fill-Takt");
+        printPattern (g, 48, false, "Groove 48");
+        printPattern (g, 48, true, "Fill-Durchlauf 48");
+        printPattern (g, 16, false, "gekürzt auf 16");
 
-        if (g.main.v[T_KICK][0] <= 0.f) fail ("Kick fehlt auf der Eins");
-        if (g.main.count() < 8) fail ("Pattern zu leer");
+        if (g.body[T_KICK][0] <= 0.f) fail ("Kick fehlt auf der Eins");
+        if (g.count (48) < 24) fail ("Pattern zu leer");
 
         // Gleicher Seed -> gleiches Ergebnis
-        const GenResult g2 = Generator::generate (gs, 1234u + (uint32_t) genre, locks, {});
-        if (std::memcmp (&g.main, &g2.main, sizeof (Pattern)) != 0) fail ("Generator nicht deterministisch");
+        const Pattern g2 = Generator::generate (gs, 1234u + (uint32_t) genre, locks, Pattern());
+        if (std::memcmp (&g, &g2, sizeof (Pattern)) != 0) fail ("Generator nicht deterministisch");
 
-        // Sperre: Kick bleibt beim Neu-Erzeugen erhalten
+        // Sperre: Kick bleibt beim Neu-Erzeugen erhalten (Groove, Ending und Fill)
         std::array<bool, NUM_TRACKS> lk {}; lk[T_KICK] = true;
-        const GenResult g3 = Generator::generate (gs, 999u, lk, g);
-        if (g3.main.v[T_KICK] != g.main.v[T_KICK] || g3.fill.v[T_KICK] != g.fill.v[T_KICK]) fail ("Sperre der Kick-Spur wirkt nicht");
+        const Pattern g3 = Generator::generate (gs, 999u, lk, g);
+        if (g3.body[T_KICK] != g.body[T_KICK] || g3.ending[T_KICK] != g.ending[T_KICK] || g3.fillEnd[T_KICK] != g.fillEnd[T_KICK])
+            fail ("Sperre der Kick-Spur wirkt nicht");
 
-        // Dichte: mehr Dichte -> im Mittel mehr Schläge
-        int lo = 0, hi = 0;
-        for (uint32_t s = 1; s <= 40; ++s)
+        // Statistik über viele Seeds: Dichte, Entwicklung über 3 Takte, gelegentliche Variation am Ende
+        int lo = 0, hi = 0, evolving = 0, withEnding = 0;
+        for (uint32_t sd = 1; sd <= 100; ++sd)
         {
-            GenSettings a = gs; a.density = 0.1f; lo += Generator::generate (a, s, locks, {}).main.count();
-            GenSettings b = gs; b.density = 0.9f; hi += Generator::generate (b, s, locks, {}).main.count();
+            GenSettings a = gs; a.density = 0.1f; lo += Generator::generate (a, sd, locks, Pattern()).count (48);
+            GenSettings b = gs; b.density = 0.9f; hi += Generator::generate (b, sd, locks, Pattern()).count (48);
+            const Pattern q = Generator::generate (gs, sd * 31u, locks, Pattern());
+            bool diff = false, end = false;
+            for (int t = 0; t < NUM_TRACKS; ++t)
+            {
+                for (int k = 0; k < 16; ++k)
+                    if (q.body[(size_t) t][(size_t) k] != q.body[(size_t) t][(size_t) k + 16] || q.body[(size_t) t][(size_t) k] != q.body[(size_t) t][(size_t) k + 32]) diff = true;
+                for (float x : q.ending[(size_t) t]) if (x >= 0.f) end = true;
+            }
+            evolving += diff ? 1 : 0;
+            withEnding += end ? 1 : 0;
         }
+        std::printf ("  100 Pattern: %d entwickeln sich über 3 Takte, %d mit Variation im letzten Viertel\n", evolving, withEnding);
         if (hi <= lo) fail ("Dichte wirkt nicht");
+        if (evolving < 60) fail ("Takte 2/3 zu selten verändert");
+        if (withEnding < 25 || withEnding > 95) fail ("Variation am Ende nicht 'hin und wieder'");
 
-        // 8 Takte abspielen (Fill alle 4 Takte, Swing, Humanize)
-        DrumEngine eng;
-        eng.prepare (sr);
-        const int kitIdx = genre % NUM_KITS;
-        for (int t = 0; t < NUM_TRACKS; ++t) eng.setSample (t, kit[kitIdx][(size_t) t].get());
-        std::array<TrackSettings, NUM_TRACKS> ts {};
-        for (int t = 0; t < NUM_TRACKS; ++t) { ts[(size_t) t].level = tracks()[(size_t) t].level; ts[(size_t) t].pan = tracks()[(size_t) t].pan; }
+        // Kürzen: die Variation wandert ans neue Ende
+        for (int len : { 16, 24, 32 })
+            for (int t = 0; t < NUM_TRACKS; ++t)
+                if (g.ending[(size_t) t][END_STEPS - 1] >= 0.f && std::abs (g.value (t, len - 1, len, false) - g.ending[(size_t) t][END_STEPS - 1]) > 1e-6f)
+                    fail ("Variation fehlt am Ende bei Länge " + std::to_string (len));
 
-        Sequencer seq;
-        const double bpm = Generator::suggestedBpm (genre);
-        const double totalPpq = 8 * 4.0;
-        const int total = (int) (totalPpq * 60.0 / bpm * sr) + (int) sr;
-        std::vector<float> L ((size_t) total, 0.f), R ((size_t) total, 0.f);
-        std::vector<NoteEvent> ev;
-        int crashes = 0, fillSnares = 0, events = 0;
-        double ppq = 0.0;
-        for (int pos = 0; pos + block <= total; pos += block)
+        // Abspielen: 4 Durchläufe bei Länge 48 und 16 (Fill jeden 2. Durchlauf, Swing, Humanize)
+        for (int len : { 48, 16 })
         {
-            ev.clear();
-            if (ppq < totalPpq)
-            {
-                Sequencer::Block b; b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = sr; b.numSamples = block;
-                b.swing = genre == 3 ? 0.4f : 0.f; b.humanize = 0.2f; b.fillEvery = 4;
-                seq.collect (b, g.main, g.fill, ev);
-                // nur 8 Takte: Schläge ab Takt 9 verwerfen
-                const double limit = (totalPpq - ppq) * (sr * 60.0 / bpm);
-                ev.erase (std::remove_if (ev.begin(), ev.end(), [&] (const NoteEvent& e) { return e.offset >= limit - 1.0; }), ev.end());
-            }
-            for (auto& e : ev)
-            {
-                eng.trigger (e.track, e.velocity, e.offset, ts[(size_t) e.track]);
-                ++events;
-                if (e.track == T_CRASH) ++crashes;
-            }
-            float* ls[NUM_TRACKS]; float* rs[NUM_TRACKS];
-            for (int t = 0; t < NUM_TRACKS; ++t) { ls[t] = &L[(size_t) pos]; rs[t] = &R[(size_t) pos]; }
-            eng.render (ls, rs, block);
-            ppq += block / (sr * 60.0 / bpm);
-        }
-        (void) fillSnares;
+            DrumEngine eng;
+            eng.prepare (sr);
+            const int kitIdx = genre % NUM_KITS;
+            for (int t = 0; t < NUM_TRACKS; ++t) eng.setSample (t, kit[kitIdx][(size_t) t].get());
+            std::array<TrackSettings, NUM_TRACKS> ts {};
+            for (int t = 0; t < NUM_TRACKS; ++t) { ts[(size_t) t].level = tracks()[(size_t) t].level; ts[(size_t) t].pan = tracks()[(size_t) t].pan; }
 
-        float peak = 0.f; double rms = 0.0; bool nan = false;
-        for (size_t i = 0; i < L.size(); ++i)
-        {
-            if (! std::isfinite (L[i]) || ! std::isfinite (R[i])) nan = true;
-            peak = std::fmax (peak, std::fmax (std::fabs (L[i]), std::fabs (R[i])));
-            rms += (double) L[i] * L[i];
-        }
-        rms = std::sqrt (rms / (double) L.size());
-        const int expected = g.main.count() * 6 + g.fill.count() * 2 + 1;   // + Crash nach dem ersten Fill (Takt 5)
-        std::printf ("  8 Takte: %d Ereignisse (erwartet %d), Crashs %d, Spitze %.2f, RMS %.3f\n", events, expected, crashes, peak, rms);
-        if (nan) fail ("NaN im Ausgang");
-        if (rms < 0.01) fail ("Ausgang zu leise / still");
-        if (peak > 1.6f) fail ("Ausgang übersteuert stark");
-        if (events < expected - 2 || events > expected + 2) fail ("Anzahl der Ereignisse stimmt nicht");
-        if (crashes < 1) fail ("Crash nach dem Fill fehlt");
-
-        if (! outDir.empty())
+            Sequencer seq;
+            const double bpm = Generator::suggestedBpm (genre);
+            const double totalPpq = 4 * len / 4.0;
+            const int total = (int) (totalPpq * 60.0 / bpm * sr) + (int) sr;
+            std::vector<float> L ((size_t) total, 0.f), R ((size_t) total, 0.f);
+            std::vector<NoteEvent> ev;
+            int crashes = 0, events = 0;
+            double ppq = 0.0;
+            for (int pos = 0; pos + block <= total; pos += block)
             {
-            std::string nm = genreNames()[(size_t) genre];
-            for (auto& ch : nm) if (! std::isalnum ((unsigned char) ch)) ch = '_';
-            writeWav (outDir + "/" + std::to_string (genre) + "_" + nm + ".wav", L, R, (int) sr);
+                ev.clear();
+                if (ppq < totalPpq)
+                {
+                    Sequencer::Block b; b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = sr; b.numSamples = block;
+                    b.swing = genre == 3 ? 0.4f : 0.f; b.humanize = 0.2f; b.fillEvery = 2; b.length = len;
+                    seq.collect (b, g, ev);
+                    const double limit = (totalPpq - ppq) * (sr * 60.0 / bpm);
+                    ev.erase (std::remove_if (ev.begin(), ev.end(), [&] (const NoteEvent& e) { return e.offset >= limit - 1.0; }), ev.end());
+                }
+                for (auto& e : ev)
+                {
+                    eng.trigger (e.track, e.velocity, e.offset, ts[(size_t) e.track]);
+                    ++events;
+                    if (e.track == T_CRASH) ++crashes;
+                }
+                float* ls[NUM_TRACKS]; float* rs[NUM_TRACKS];
+                for (int t = 0; t < NUM_TRACKS; ++t) { ls[t] = &L[(size_t) pos]; rs[t] = &R[(size_t) pos]; }
+                eng.render (ls, rs, block);
+                ppq += block / (sr * 60.0 / bpm);
+            }
+
+            float peak = 0.f; double rms = 0.0; bool nan = false;
+            for (size_t i = 0; i < L.size(); ++i)
+            {
+                if (! std::isfinite (L[i]) || ! std::isfinite (R[i])) nan = true;
+                peak = std::fmax (peak, std::fmax (std::fabs (L[i]), std::fabs (R[i])));
+                rms += (double) L[i] * L[i];
+            }
+            rms = std::sqrt (rms / (double) L.size());
+            // Durchläufe 0 und 2 normal, 1 und 3 mit Fill, Crash zu Beginn von Durchlauf 2
+            const int crashOn1 = g.value (T_CRASH, 0, len, false) > 0.f ? 0 : 1;
+            const int expected = g.count (len, false) * 2 + g.count (len, true) * 2 + crashOn1;
+            std::printf ("  Länge %d, 4 Durchläufe: %d Ereignisse (erwartet %d), Crashs %d, Spitze %.2f, RMS %.3f\n", len, events, expected, crashes, peak, rms);
+            if (nan) fail ("NaN im Ausgang");
+            if (rms < 0.01) fail ("Ausgang zu leise / still");
+            if (peak > 1.6f) fail ("Ausgang übersteuert stark");
+            if (events < expected - 2 || events > expected + 2) fail ("Anzahl der Ereignisse stimmt nicht");
+            if (crashes < 1) fail ("Crash nach dem Fill fehlt");
+
+            if (! outDir.empty() && len == 48)
+            {
+                std::string nm = genreNames()[(size_t) genre];
+                for (auto& ch : nm) if (! std::isalnum ((unsigned char) ch)) ch = '_';
+                writeWav (outDir + "/" + std::to_string (genre) + "_" + nm + ".wav", L, R, (int) sr);
+            }
         }
     }
 
-    // Sequencer: Block-Grenzen dürfen keine Schläge verlieren oder verdoppeln (verschiedene Blockgrößen)
+    // Sequencer: Block-Grenzen dürfen keine Schläge verlieren oder verdoppeln (verschiedene Blockgrößen und Längen)
     {
         Pattern p; p.clear();
-        for (int k = 0; k < NUM_STEPS; ++k) p.v[T_CHAT][(size_t) k] = 0.8f;
-        for (int bs : { 1, 17, 64, 333, 4096 })
-        {
-            Sequencer s; int n = 0; double ppq = 0.0; std::vector<NoteEvent> ev;
-            const double bpm = 137.0;
-            while (ppq < 16.0)
+        for (int k = 0; k < MAX_STEPS; ++k) p.body[T_CHAT][(size_t) k] = 0.8f;
+        for (int len : { 16, 24, 48 })
+            for (int bs : { 1, 17, 64, 333, 4096 })
             {
-                Sequencer::Block b; b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = 44100.0; b.numSamples = bs; b.swing = 0.6f;
-                ev.clear(); s.collect (b, p, p, ev);
-                n += (int) ev.size();
-                ppq += bs / (44100.0 * 60.0 / bpm);
+                Sequencer sq; int n = 0; double ppq = 0.0; std::vector<NoteEvent> ev;
+                const double bpm = 137.0;
+                while (ppq < 16.0)
+                {
+                    Sequencer::Block b; b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = 44100.0; b.numSamples = bs; b.swing = 0.6f; b.length = len;
+                    ev.clear(); sq.collect (b, p, ev);
+                    n += (int) ev.size();
+                    ppq += bs / (44100.0 * 60.0 / bpm);
+                }
+                if (n < 64 || n > 65) fail ("Länge " + std::to_string (len) + ", Blockgröße " + std::to_string (bs) + ": " + std::to_string (n) + " statt 64 Schläge");
             }
-            if (n < 64 || n > 65) fail ("Blockgröße " + std::to_string (bs) + ": " + std::to_string (n) + " statt 64 Schläge");
-        }
     }
 
     // Klangfarbe nach Anschlag und Round Robin (Snare des Kits ANALOG)

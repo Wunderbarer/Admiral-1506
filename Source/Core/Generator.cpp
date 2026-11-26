@@ -70,11 +70,13 @@ float applyDensity (float p, float d)
     return p + (1.f - p) * (d - 0.5f) * 2.f * 0.7f;
 }
 
-void genMain (Pattern& out, const GenSettings& s, Rng& r)
+struct Bar { std::array<std::array<float, NUM_STEPS>, NUM_TRACKS> v {}; };
+
+void genBar (Bar& out, const GenSettings& s, Rng& r)
 {
     const auto& tm = kTemplates[std::clamp (s.genre, 0, (int) (sizeof (kTemplates) / sizeof (kTemplates[0])) - 1)];
     const float d = std::clamp (s.density, 0.f, 1.f), v = std::clamp (s.variation, 0.f, 1.f);
-    out.clear();
+    for (auto& row : out.v) row.fill (0.f);
 
     for (int t = 0; t < NUM_TRACKS; ++t)
     {
@@ -135,70 +137,188 @@ void genMain (Pattern& out, const GenSettings& s, Rng& r)
     // Sicherheitsnetz: die Kick-Spur der Vorlage beginnt immer auf der Eins
     if (tm[T_KICK][0] == 'X') out.v[T_KICK][0] = 1.f;
 }
-} // namespace
 
-Pattern Generator::makeFill (const Pattern& main, const GenSettings& s, uint32_t seed)
+// Takt 2 und 3: der Groove entwickelt sich leicht weiter (Zählzeiten und Backbeat bleiben stehen)
+Bar varyBar (const Bar& a, const GenSettings& s, Rng& r, float strength)
 {
-    Rng r (seed * 2654435761u + 17u);
-    Pattern f = main;
-    const float v = std::clamp (s.variation, 0.f, 1.f), d = std::clamp (s.density, 0.f, 1.f);
-    const int w = (v > 0.4f && r.chance (0.5f)) ? 8 : 4;
-    const int start = NUM_STEPS - w;
+    Bar b = a;
+    const float v = std::clamp (s.variation, 0.f, 1.f) * strength;
+    auto empty = [&] (int t, int k) { return b.v[(size_t) t][(size_t) k] <= 0.f; };
 
-    // Im Fill-Bereich werden Becken, Clap und Percussion ausgedünnt
-    for (int t : { (int) T_CHAT, (int) T_OHAT, (int) T_CLAP, (int) T_RIM, (int) T_COWBELL, (int) T_SNARE, (int) T_LTOM, (int) T_HTOM })
-        for (int k = start; k < NUM_STEPS; ++k) f.v[(size_t) t][(size_t) k] = 0.f;
-    for (int k = start + 1; k < NUM_STEPS; ++k) f.v[T_KICK][(size_t) k] = 0.f;
-
-    auto ramp = [&] (int k) { return 0.45f + 0.55f * (float) (k - start + 1) / (float) w; };
-    const bool sixteenths = d > 0.35f;
-    const int type = r.below (4);
-
-    for (int k = start; k < NUM_STEPS; ++k)
+    // Kick: zusätzlicher synkopierter Schlag
+    if (r.chance (0.2f + 0.45f * v))
     {
-        const int i = k - start;
-        const bool on8 = (i % 2) == 0;
-        if (! sixteenths && ! on8) continue;
-        const float vel = std::min (1.f, ramp (k) + r.range (-0.05f, 0.05f));
-        switch (type)
+        static const int pos[] = { 3, 6, 7, 10, 11, 14 };
+        for (int tries = 0; tries < 6; ++tries)
         {
-            case 0: // Snare-Wirbel
-                f.v[T_SNARE][(size_t) k] = vel;
-                break;
-            case 1: // Toms abwärts
-                f.v[i < w / 2 ? T_HTOM : T_LTOM][(size_t) k] = vel;
-                break;
-            case 2: // Snare / Hi Tom / Low Tom im Wechsel
+            const int k = pos[r.below (6)];
+            if (empty (T_KICK, k)) { b.v[T_KICK][(size_t) k] = r.range (0.6f, 0.8f); break; }
+        }
+    }
+    // Kick: einen optionalen (nicht betonten) Schlag weglassen
+    if (r.chance (0.15f * v))
+        for (int k = 1; k < NUM_STEPS; ++k)
+            if (b.v[T_KICK][(size_t) k] > 0.f && b.v[T_KICK][(size_t) k] < 0.99f && r.chance (0.5f)) { b.v[T_KICK][(size_t) k] = 0.f; break; }
+    // Snare: Ghost-Note
+    if (r.chance (0.25f + 0.45f * v))
+    {
+        static const int pos[] = { 1, 3, 6, 7, 9, 11, 14, 15 };
+        for (int tries = 0; tries < 6; ++tries)
+        {
+            const int k = pos[r.below (8)];
+            if (empty (T_SNARE, k)) { b.v[T_SNARE][(size_t) k] = r.range (0.3f, 0.45f); break; }
+        }
+    }
+    // Hi-Hat: ein, zwei Sechzehntel dazu oder offene Hat als "Luftholer"
+    if (r.chance (0.3f * v + 0.1f))
+        for (int i = 0, added = 0; i < 16 && added < 2; ++i)
+        {
+            const int k = r.below (NUM_STEPS);
+            if ((k & 1) && empty (T_CHAT, k) && empty (T_OHAT, k)) { b.v[T_CHAT][(size_t) k] = r.range (0.35f, 0.55f); ++added; }
+        }
+    if (r.chance (0.2f + 0.3f * v))
+    {
+        const int k = r.chance (0.6f) ? 14 : 6;
+        if (empty (T_OHAT, k)) { b.v[T_OHAT][(size_t) k] = r.range (0.6f, 0.8f); b.v[T_CHAT][(size_t) k] = 0.f; }
+    }
+    // Percussion: einen Schlag um eine Sechzehntel verschieben
+    for (int t : { (int) T_RIM, (int) T_COWBELL, (int) T_CLAP })
+        if (r.chance (0.2f * v))
+            for (int tries = 0; tries < 8; ++tries)
             {
-                const int seq[3] = { T_SNARE, T_HTOM, T_LTOM };
-                f.v[(size_t) seq[(i / (sixteenths ? 1 : 2)) % 3]][(size_t) k] = vel;
-                break;
+                const int k = 1 + r.below (NUM_STEPS - 2);
+                if (t == T_CLAP && (k == 4 || k == 12)) continue;     // Backbeat bleibt
+                auto& row = b.v[(size_t) t];
+                if (row[(size_t) k] > 0.f && row[(size_t) k + 1] <= 0.f) { row[(size_t) k + 1] = row[(size_t) k]; row[(size_t) k] = 0.f; break; }
             }
-            default: // Snare auf den Achteln, Toms dazwischen
-                if (on8) f.v[T_SNARE][(size_t) k] = vel;
-                else     f.v[i < w / 2 ? T_HTOM : T_LTOM][(size_t) k] = vel * 0.9f;
+    return b;
+}
+
+// Kleine Variation im letzten Viertel ("hin und wieder"): wird als Ending-Ebene abgelegt,
+// nur Schritte, die sich vom Groove unterscheiden. Index 8..11 = die letzten vier Schritte jeder Länge.
+void makeEnding (Pattern& p, const GenSettings& s, Rng& r)
+{
+    p.clearEnding();
+    const float v = std::clamp (s.variation, 0.f, 1.f);
+    if (! r.chance (0.35f + 0.45f * v)) return;          // nicht jedes Pattern bekommt eine Variation
+
+    std::array<std::array<float, END_STEPS>, NUM_TRACKS> e {};
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        for (int i = 0; i < END_STEPS; ++i) e[(size_t) t][(size_t) i] = p.body[(size_t) t][(size_t) (MAX_STEPS - END_STEPS + i)];
+
+    const int kinds = r.chance (0.4f * v) ? 2 : 1;
+    for (int n = 0; n < kinds; ++n)
+    {
+        switch (r.below (v > 0.5f ? 6 : 5))
+        {
+            case 0: // Snare-Auftakt mit Ghost-Notes
+                if (e[T_SNARE][10] <= 0.f) e[T_SNARE][10] = r.range (0.35f, 0.45f);
+                if (e[T_SNARE][11] <= 0.f) e[T_SNARE][11] = r.range (0.5f, 0.65f);
+                break;
+            case 1: // Kick schiebt an
+                e[T_KICK][r.chance (0.5f) ? 10 : 11] = r.range (0.7f, 0.85f);
+                break;
+            case 2: // offene Hi-Hat zum Abschluss
+                e[T_OHAT][10] = r.range (0.65f, 0.85f);
+                e[T_CHAT][10] = 0.f; e[T_CHAT][11] = 0.f;
+                break;
+            case 3: // kurzer Stopp, dann Clap
+                for (int i = 9; i < 12; ++i) { e[T_KICK][(size_t) i] = 0.f; e[T_CHAT][(size_t) i] = 0.f; e[T_OHAT][(size_t) i] = 0.f; }
+                e[T_CLAP][11] = r.range (0.8f, 0.95f);
+                break;
+            case 4: // Tom-Auftakt
+                e[T_HTOM][10] = r.range (0.65f, 0.8f);
+                e[T_LTOM][11] = r.range (0.7f, 0.85f);
+                e[T_CHAT][10] = 0.f; e[T_CHAT][11] = 0.f;
+                break;
+            default: // Hats verdoppeln (Sechzehntel) über die letzten acht Schritte
+                for (int i = 4; i < 12; ++i)
+                    if (e[T_OHAT][(size_t) i] <= 0.f) e[T_CHAT][(size_t) i] = (i & 1) ? r.range (0.4f, 0.5f) : r.range (0.65f, 0.8f);
                 break;
         }
     }
-    // Abschluss: betonter Schlag auf der letzten Sechzehntel
-    f.v[T_SNARE][NUM_STEPS - 1] = std::max (f.v[T_SNARE][NUM_STEPS - 1], 0.95f);
-    if (r.chance (0.5f)) f.v[T_KICK][NUM_STEPS - 1] = 0.9f;
-    return f;
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        for (int i = 0; i < END_STEPS; ++i)
+            if (std::abs (e[(size_t) t][(size_t) i] - p.body[(size_t) t][(size_t) (MAX_STEPS - END_STEPS + i)]) > 1.0e-4f)
+                p.ending[(size_t) t][(size_t) i] = e[(size_t) t][(size_t) i];
+}
+} // namespace
+
+void Generator::makeFill (Pattern& p, const GenSettings& s, uint32_t seed)
+{
+    Rng r (seed * 2654435761u + 17u);
+    p.clearFill();
+    const float v = std::clamp (s.variation, 0.f, 1.f), d = std::clamp (s.density, 0.f, 1.f);
+    int w = 4;
+    if (v > 0.4f && r.chance (0.5f)) w = 8;
+    if (v > 0.7f && r.chance (0.3f)) w = 12;
+    const int start = END_STEPS - w;                        // Fenster rechtsbündig in der Fill-Ebene
+
+    // Ausgangspunkt: Ende des Grooves inklusive kleiner Variation
+    auto base = [&] (int t, int i)
+    {
+        const float e = p.ending[(size_t) t][(size_t) i];
+        return e >= 0.f ? e : p.body[(size_t) t][(size_t) (MAX_STEPS - END_STEPS + i)];
+    };
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        for (int i = start; i < END_STEPS; ++i) p.fillEnd[(size_t) t][(size_t) i] = base (t, i);
+
+    // Im Fill-Bereich werden Becken, Clap und Percussion ausgedünnt
+    for (int t : { (int) T_CHAT, (int) T_OHAT, (int) T_CLAP, (int) T_RIM, (int) T_COWBELL, (int) T_SNARE, (int) T_LTOM, (int) T_HTOM })
+        for (int i = start; i < END_STEPS; ++i) p.fillEnd[(size_t) t][(size_t) i] = 0.f;
+    for (int i = start + 1; i < END_STEPS; ++i) p.fillEnd[T_KICK][(size_t) i] = 0.f;
+
+    auto ramp = [&] (int i) { return 0.45f + 0.55f * (float) (i - start + 1) / (float) w; };
+    const bool sixteenths = d > 0.35f;
+    const int type = r.below (4);
+    for (int i = start; i < END_STEPS; ++i)
+    {
+        const int j = i - start;
+        const bool on8 = (j % 2) == 0;
+        if (! sixteenths && ! on8) continue;
+        const float vel = std::min (1.f, ramp (i) + r.range (-0.05f, 0.05f));
+        switch (type)
+        {
+            case 0: p.fillEnd[T_SNARE][(size_t) i] = vel; break;                                     // Snare-Wirbel
+            case 1: p.fillEnd[j < w / 2 ? T_HTOM : T_LTOM][(size_t) i] = vel; break;                  // Toms abwärts
+            case 2:                                                                                    // Snare / Toms im Wechsel
+            {
+                const int seq[3] = { T_SNARE, T_HTOM, T_LTOM };
+                p.fillEnd[(size_t) seq[(j / (sixteenths ? 1 : 2)) % 3]][(size_t) i] = vel;
+                break;
+            }
+            default:                                                                                   // Snare auf Achteln, Toms dazwischen
+                if (on8) p.fillEnd[T_SNARE][(size_t) i] = vel;
+                else     p.fillEnd[j < w / 2 ? T_HTOM : T_LTOM][(size_t) i] = vel * 0.9f;
+                break;
+        }
+    }
+    p.fillEnd[T_SNARE][END_STEPS - 1] = std::max (p.fillEnd[T_SNARE][END_STEPS - 1], 0.95f);
+    if (r.chance (0.5f)) p.fillEnd[T_KICK][END_STEPS - 1] = 0.9f;
 }
 
-GenResult Generator::generate (const GenSettings& s, uint32_t seed,
-                               const std::array<bool, NUM_TRACKS>& locked, const GenResult& previous)
+Pattern Generator::generate (const GenSettings& s, uint32_t seed,
+                             const std::array<bool, NUM_TRACKS>& locked, const Pattern& previous)
 {
     Rng r (seed);
-    GenResult g;
-    genMain (g.main, s, r);
-    for (int t = 0; t < NUM_TRACKS; ++t)
-        if (locked[(size_t) t]) g.main.v[(size_t) t] = previous.main.v[(size_t) t];
+    Bar a;
+    genBar (a, s, r);
+    const Bar b2 = varyBar (a, s, r, 0.6f);
+    const Bar b3 = varyBar (r.chance (0.5f) ? b2 : a, s, r, 1.f);
 
-    g.fill = makeFill (g.main, s, seed);
+    Pattern p;
+    const Bar* bars[3] = { &a, &b2, &b3 };
+    for (int bar = 0; bar < 3; ++bar)
+        for (int t = 0; t < NUM_TRACKS; ++t)
+            for (int k = 0; k < NUM_STEPS; ++k)
+                p.body[(size_t) t][(size_t) (bar * NUM_STEPS + k)] = bars[bar]->v[(size_t) t][(size_t) k];
+
+    makeEnding (p, s, r);
+    makeFill (p, s, seed);
+
     for (int t = 0; t < NUM_TRACKS; ++t)
-        if (locked[(size_t) t]) g.fill.v[(size_t) t] = previous.fill.v[(size_t) t];
-    return g;
+        if (locked[(size_t) t]) p.copyTrack (previous, t);
+    return p;
 }
 
 int Generator::suggestedBpm (int genre)

@@ -13,20 +13,16 @@ struct GenSettings
     float variation = 0.35f;  // 0..1: zusätzliche Zufallsschläge, Ghost-Notes, Anschlags-Streuung
 };
 
-struct GenResult
-{
-    Pattern main, fill;
-};
-
 class Generator
 {
 public:
-    // Erzeugt Haupt- und Fill-Takt. Gesperrte Spuren (locked[t] = true) werden aus "previous" übernommen.
-    static GenResult generate (const GenSettings& s, uint32_t seed,
-                               const std::array<bool, NUM_TRACKS>& locked, const GenResult& previous);
+    // Erzeugt ein Pattern mit 48 Schritten (3 Takte mit leichter Entwicklung), gelegentlich einer kleinen
+    // Variation im letzten Viertel und einem Fill. Gesperrte Spuren (locked[t]) werden aus "previous" übernommen.
+    static Pattern generate (const GenSettings& s, uint32_t seed,
+                             const std::array<bool, NUM_TRACKS>& locked, const Pattern& previous);
 
-    // Nur den Fill-Takt neu erzeugen (aus dem Haupt-Takt abgeleitet)
-    static Pattern makeFill (const Pattern& main, const GenSettings& s, uint32_t seed);
+    // Nur die Fill-Ebene neu erzeugen (aus dem Ende des Grooves abgeleitet)
+    static void makeFill (Pattern& p, const GenSettings& s, uint32_t seed);
 
     // Empfohlenes Tempo der Genres (nur Anzeige / Export ohne Host)
     static int suggestedBpm (int genre);

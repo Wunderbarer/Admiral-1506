@@ -80,13 +80,50 @@ int main (int argc, char** argv)
 
     // Hörbeispiel: plugin_test <Ordner> --demo  (rendert mehrere Genres mit Fills, GLUE und TAPE in eine WAV-Datei)
     const bool kitDemo = argc > 2 && juce::String (argv[2]) == "--kits";
-    if (argc > 2 && (juce::String (argv[2]) == "--demo" || kitDemo))
+    const bool lenDemo = argc > 2 && juce::String (argv[2]) == "--lengths";
+    if (argc > 2 && (juce::String (argv[2]) == "--demo" || kitDemo || lenDemo))
     {
         std::unique_ptr<AdmiralProcessor> d (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
         const double sr = 48000.0; const int block = 512;
         std::vector<float> L, R;
         auto setP = [&] (int idx, float plain) { auto* q = d->getParam (idx); q->setValueNotifyingHost (q->convertTo0to1 (plain)); };
         const int genres[] = { 0, 1, 3, 4, 5 };
+        if (lenDemo)
+        {
+            // ein Pattern: 2 Durchläufe mit 48 (der zweite mit Fill), dann gekürzt auf 32 und 16
+            setP (ad::GP_GENRE, 0.f); setP (ad::GP_KIT, 2.f); setP (ad::GP_FILL, 1.f); setP (ad::GP_VARIATION, 0.6f);
+            setP (ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.25f);
+            for (uint32_t tries = 0; tries < 40; ++tries)      // ein Pattern mit Variation am Ende wählen
+            {
+                d->generateNew();
+                bool hasEnd = false;
+                for (auto& row : d->getPattern().ending) for (float x : row) if (x >= 0.f) hasEnd = true;
+                if (hasEnd) break;
+            }
+            d->pollParameters();
+            const std::pair<int, int> parts[] = { { 3, 2 }, { 2, 2 }, { 0, 4 } };   // (Längen-Wahl, Durchläufe)
+            for (auto [lc, cycles] : parts)
+            {
+                setP (ad::GP_LENGTH, (float) lc);
+                const int len = d->getLength();
+                std::printf ("Teil: %d Schritte x %d Durchläufe\n", len, cycles);
+                FakeHost host; host.bpm = 100.0;
+                d->setPlayHead (&host);
+                d->prepareToPlay (sr, block);
+                juce::AudioBuffer<float> buf (d->getTotalNumOutputChannels(), block);
+                juce::MidiBuffer midi;
+                const int blocks = (int) std::ceil (cycles * len / 4.0 * 60.0 / host.bpm * sr / block);
+                for (int b = 0; b < blocks; ++b)
+                {
+                    midi.clear();
+                    d->processBlock (buf, midi);
+                    for (int j = 0; j < block; ++j) { L.push_back (buf.getSample (0, j)); R.push_back (buf.getSample (1, j)); }
+                    host.ppq += block / (sr * 60.0 / host.bpm);
+                }
+                d->setPlayHead (nullptr);
+                for (int j = 0; j < (int) (0.8 * sr); ++j) { L.push_back (0.f); R.push_back (0.f); }
+            }
+        }
         if (kitDemo)
         {
             // ein Pattern (Synthwave), nacheinander mit sechs gewürfelten Kits
@@ -117,7 +154,7 @@ int main (int argc, char** argv)
             }
         }
         const int kitsUsed[] = { 2, 1, 2, 0, 1 };
-        for (int gi = 0; gi < (kitDemo ? 0 : 5); ++gi)
+        for (int gi = 0; gi < (kitDemo || lenDemo ? 0 : 5); ++gi)
         {
             const int g = genres[gi];
             setP (ad::GP_GENRE, (float) g); setP (ad::GP_KIT, (float) kitsUsed[gi]);
@@ -158,7 +195,7 @@ int main (int argc, char** argv)
 
     std::unique_ptr<AdmiralProcessor> p (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
     check (p != nullptr, "Plugin erzeugt");
-    check (p->getPattern (0).count() > 5, "Start-Pattern vorhanden (" + juce::String (p->getPattern (0).count()) + " Schläge)");
+    check (p->getLength() == 48 && p->getPattern().count (48) > 15, "Start-Pattern mit 48 Schritten (" + juce::String (p->getPattern().count (48)) + " Schläge)");
     check (p->getSampleName (0) == "ANALOG KIT", "Kit-Samples eingebettet (" + p->getSampleName (0) + ")");
 
     auto r = run (*p, 8);
@@ -180,10 +217,10 @@ int main (int argc, char** argv)
     }
 
     // Verlauf
-    const auto before = p->getPattern (0);
+    const auto before = p->getPattern();
     p->generateNew();
     p->historyBack();
-    const auto after = p->getPattern (0);
+    const auto after = p->getPattern();
     check (std::memcmp (&before, &after, sizeof (ad::Pattern)) == 0, "Verlauf zurück");
 
     // Einzelausgang: Kick auf eigenen Ausgang
@@ -281,20 +318,50 @@ int main (int argc, char** argv)
         p->kitHistoryForward();
     }
 
+    // Länge und Variations-Zone: Bearbeiten, Kürzen, Verlängern
+    {
+        auto setLen = [&] (int choice) { auto* q = p->getParam (ad::GP_LENGTH); q->setValueNotifyingHost (q->convertTo0to1 ((float) choice)); };
+        setLen (3);
+        p->setCell (0, ad::T_COWBELL, 47, 1.f);       // letzter Schritt bei 48 -> Variations-Ebene
+        p->setCell (0, ad::T_COWBELL, 3, 0.5f);       // vorne -> Groove
+        const auto pt = p->getPattern();
+        check (pt.ending[ad::T_COWBELL][11] > 0.99f && pt.body[ad::T_COWBELL][3] > 0.49f, "Bearbeiten: Zone schreibt Variation, sonst Groove");
+        bool moved = true;
+        for (int c = 0; c < 3; ++c)
+        {
+            setLen (c);
+            const int len = p->getLength();
+            if (p->getCell (0, ad::T_COWBELL, len - 1) < 0.99f) moved = false;
+            auto rl = run (*p, 2);
+            if (rl.nan || rl.rms < 0.02) moved = false;
+        }
+        check (moved, "Kürzen auf 32/24/16: Variation wandert ans Ende, Wiedergabe läuft");
+        setLen (3);
+        check (p->getCell (0, ad::T_COWBELL, 47) > 0.99f && std::abs (p->getPattern().body[ad::T_COWBELL][40] - pt.body[ad::T_COWBELL][40]) < 1e-6f,
+               "Verlängern auf 48: nichts verloren");
+        p->removeVariation (0, ad::T_COWBELL, 47);
+        check (p->getPattern().ending[ad::T_COWBELL][11] < 0.f, "Variation an einem Schritt entfernen");
+    }
+
     // Zustand speichern / laden (inkl. eigenem Sample und Sperre)
     {
         p->setLocked (3, true);
-        p->setStep (1, 2, 5, 0.42f);
+        p->setCell (1, 2, 45, 0.42f);
+        p->getParam (ad::GP_LENGTH)->setValueNotifyingHost (p->getParam (ad::GP_LENGTH)->convertTo0to1 (2.f));
         juce::MemoryBlock mb;
         p->getStateInformation (mb);
         std::unique_ptr<AdmiralProcessor> q (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
         q->setStateInformation (mb.getData(), (int) mb.getSize());
-        bool same = true;
-        for (int w = 0; w < 2; ++w)
-            for (int t = 0; t < ad::NUM_TRACKS; ++t)
-                for (int k = 0; k < ad::NUM_STEPS; ++k)
-                    if (std::abs (p->getStep (w, t, k) - q->getStep (w, t, k)) > 0.002f) same = false;
-        check (same, "Pattern nach Laden identisch");
+        bool same = q->getLength() == 32;
+        const auto a = p->getPattern(), b = q->getPattern();
+        for (int t = 0; t < ad::NUM_TRACKS; ++t)
+        {
+            for (int k = 0; k < ad::MAX_STEPS; ++k) if (std::abs (a.body[(size_t) t][(size_t) k] - b.body[(size_t) t][(size_t) k]) > 0.002f) same = false;
+            for (int i = 0; i < ad::END_STEPS; ++i)
+                if (std::abs (a.ending[(size_t) t][(size_t) i] - b.ending[(size_t) t][(size_t) i]) > 0.002f
+                    || std::abs (a.fillEnd[(size_t) t][(size_t) i] - b.fillEnd[(size_t) t][(size_t) i]) > 0.002f) same = false;
+        }
+        check (same, "Pattern (48 Schritte + Variationen) und Länge nach Laden identisch");
         check (q->isLocked (3) && ! q->isLocked (2) && q->isSoundLocked (ad::T_SNARE) && ! q->isSoundLocked (ad::T_KICK), "Sperren (Pattern + Sound) nach Laden erhalten");
         bool srcSame = true;
         for (int t = 0; t < ad::NUM_TRACKS; ++t) if (q->resolvedKit (t) != p->resolvedKit (t)) srcSame = false;
@@ -313,8 +380,21 @@ int main (int argc, char** argv)
         int notes = 0;
         if (mf.getNumTracks() > 0)
             for (auto* e : *mf.getTrack (0)) if (e->message.isNoteOn()) ++notes;
-        const auto m = p->getPattern (0).count(), fl = p->getPattern (1).count();
-        check (notes >= m * 6 + fl * 2, "MIDI-Export: " + juce::String (notes) + " Noten in 8 Takten");
+        // erwartete Noten: 8 Takte = 128 Sechzehntel in Durchläufen der eingestellten Länge
+        const auto pt = p->getPattern();
+        const int len = p->getLength(), every = ad::fillEveryCycles ((int) std::lround (p->getValue (ad::GP_FILL)));
+        int expected = 0;
+        for (int n = 0; n < 128; ++n)
+        {
+            const int c = n / len, k = n % len;
+            for (int t = 0; t < ad::NUM_TRACKS; ++t)
+            {
+                float v = pt.value (t, k, len, ad::isFillCycle (c, every));
+                if (t == ad::T_CRASH && k == 0 && ad::crashAfterFill (c, every)) v = std::max (v, 0.9f);
+                if (v > 0.f && p->getValue (ad::tp (t, ad::TP_MUTE)) < 0.5f) ++expected;
+            }
+        }
+        check (notes == expected, "MIDI-Export: " + juce::String (notes) + " Noten in 8 Takten bei Länge " + juce::String (len) + " (erwartet " + juce::String (expected) + ")");
     }
 
     // Oberfläche rendern (mit --no-gui überspringen, z. B. auf Build-Servern ohne Bildschirm)
@@ -328,6 +408,27 @@ int main (int argc, char** argv)
         juce::FileOutputStream os (f);
         juce::PNGImageFormat png;
         check (png.writeImageToStream (img, os), "Oberfläche gerendert: " + f.getFullPathName());
+
+        // zweites Bild: 48 Schritte, Seite 33-48 mit Variations-Zone
+        p->getParam (ad::GP_LENGTH)->setValueNotifyingHost (1.f);
+        p->generateNew();
+        std::function<StepMatrix* (juce::Component*)> findMatrix = [&] (juce::Component* c) -> StepMatrix*
+        {
+            if (auto* m = dynamic_cast<StepMatrix*> (c)) return m;
+            for (auto* ch : c->getChildren()) if (auto* m = findMatrix (ch)) return m;
+            return nullptr;
+        };
+        if (auto* m = findMatrix (ed.get()))
+        {
+            m->follow = false;
+            m->update();
+            m->setPage (2);
+        }
+        auto img2 = ed->createComponentSnapshot (ed->getLocalBounds(), true, 1.0f);
+        const auto f2 = out.getChildFile ("admiral_ui_page3.png");
+        f2.deleteFile();
+        juce::FileOutputStream os2 (f2);
+        png.writeImageToStream (img2, os2);
     }
 
     std::printf ("\n%s (%d Fehler)\n", failures == 0 ? "ALLE PLUGIN-TESTS BESTANDEN" : "PLUGIN-TESTS FEHLGESCHLAGEN", failures);

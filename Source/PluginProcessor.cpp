@@ -88,7 +88,7 @@ AdmiralProcessor::AdmiralProcessor()
         ccIdle[(size_t) i] = -1;
     }
     for (auto& e : ccMap) e.store (-1);
-    for (auto& v : pat) v.store (0.f);
+    for (size_t i = 0; i < pat.size(); ++i) pat[i].store (i < (size_t) kBodySize ? 0.f : -1.f);
     for (auto& p : preview) p.store (false);
     formats.registerBasicFormats();
 
@@ -230,19 +230,14 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
 
     if (sequencing)
     {
-        Pattern mainP, fillP;
-        for (int t = 0; t < NUM_TRACKS; ++t)
-            for (int k = 0; k < NUM_STEPS; ++k)
-            {
-                mainP.v[(size_t) t][(size_t) k] = pat[idx (0, t, k)].load (std::memory_order_relaxed);
-                fillP.v[(size_t) t][(size_t) k] = pat[idx (1, t, k)].load (std::memory_order_relaxed);
-            }
+        const Pattern cur = getPattern();
         Sequencer::Block b;
         b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = sr; b.numSamples = n;
         b.swing = getValue (GP_SWING); b.humanize = getValue (GP_HUMANIZE);
-        b.fillEvery = fillEveryBars ((int) std::lround (getValue (GP_FILL)));
+        b.fillEvery = fillEveryCycles ((int) std::lround (getValue (GP_FILL)));
+        b.length = getLength();
         events.clear();
-        seq.collect (b, mainP, fillP, events);
+        seq.collect (b, cur, events);
         for (const auto& e : events)
         {
             engine.trigger (e.track, e.velocity, e.offset, ts[(size_t) e.track]);
@@ -250,7 +245,7 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         }
         playStep.store (seq.lastStep());
         playFill.store (seq.lastWasFill());
-        playBar.store ((long long) std::floor (ppq / 4.0));
+        playCycle.store (seq.lastCycle());
         if (! hostPlay) internalPpq += (double) n * bpm / (60.0 * sr);
     }
     else
@@ -538,39 +533,86 @@ void AdmiralProcessor::resetSample (int track)
 }
 
 //==============================================================================
-void AdmiralProcessor::setStep (int which, int track, int step, float v)
-{
-    if (! juce::isPositiveAndBelow (which, 2) || ! juce::isPositiveAndBelow (track, NUM_TRACKS) || ! juce::isPositiveAndBelow (step, NUM_STEPS)) return;
-    pat[idx (which, track, step)].store (juce::jlimit (0.f, 1.f, v));
-    patternRevision.fetch_add (1);
-}
-
-Pattern AdmiralProcessor::getPattern (int which) const
+Pattern AdmiralProcessor::getPattern() const
 {
     Pattern p;
     for (int t = 0; t < NUM_TRACKS; ++t)
-        for (int k = 0; k < NUM_STEPS; ++k)
-            p.v[(size_t) t][(size_t) k] = pat[idx (which, t, k)].load();
+    {
+        for (int k = 0; k < MAX_STEPS; ++k) p.body[(size_t) t][(size_t) k] = pat[bIdx (t, k)].load (std::memory_order_relaxed);
+        for (int i = 0; i < END_STEPS; ++i)
+        {
+            p.ending[(size_t) t][(size_t) i]  = pat[lIdx (0, t, i)].load (std::memory_order_relaxed);
+            p.fillEnd[(size_t) t][(size_t) i] = pat[lIdx (1, t, i)].load (std::memory_order_relaxed);
+        }
+    }
     return p;
 }
 
-void AdmiralProcessor::setPattern (int which, const Pattern& p)
+void AdmiralProcessor::setPattern (const Pattern& p)
 {
     for (int t = 0; t < NUM_TRACKS; ++t)
-        for (int k = 0; k < NUM_STEPS; ++k)
-            pat[idx (which, t, k)].store (p.v[(size_t) t][(size_t) k]);
+    {
+        for (int k = 0; k < MAX_STEPS; ++k) pat[bIdx (t, k)].store (p.body[(size_t) t][(size_t) k]);
+        for (int i = 0; i < END_STEPS; ++i)
+        {
+            pat[lIdx (0, t, i)].store (p.ending[(size_t) t][(size_t) i]);
+            pat[lIdx (1, t, i)].store (p.fillEnd[(size_t) t][(size_t) i]);
+        }
+    }
     patternRevision.fetch_add (1);
 }
 
-void AdmiralProcessor::clearPattern (int which)
+void AdmiralProcessor::setCell (int view, int t, int k, float v)
 {
-    Pattern p; p.clear();
-    setPattern (which, p);
+    const int len = getLength();
+    if (! juce::isPositiveAndBelow (t, NUM_TRACKS) || ! juce::isPositiveAndBelow (k, len)) return;
+    v = juce::jlimit (0.f, 1.f, v);
+    const bool fill = view == 1;
+    const int i = Pattern::layerIndex (k, len, Pattern::zoneFor (len, fill));
+    if (i >= 0) pat[lIdx (fill ? 1 : 0, t, i)].store (v);     // Variations-Zone: Variation bearbeiten
+    else        pat[bIdx (t, k)].store (v);                   // sonst: Groove
+    patternRevision.fetch_add (1);
+}
+
+void AdmiralProcessor::removeVariation (int view, int t, int k)
+{
+    const int len = getLength();
+    const bool fill = view == 1;
+    const int i = Pattern::layerIndex (k, len, Pattern::zoneFor (len, fill));
+    if (i < 0 || ! juce::isPositiveAndBelow (t, NUM_TRACKS)) return;
+    pat[lIdx (fill ? 1 : 0, t, i)].store (-1.f);
+    patternRevision.fetch_add (1);
+}
+
+void AdmiralProcessor::clearVariation (int view)
+{
+    auto p = getPattern();
+    if (view == 1) p.clearFill(); else p.clearEnding();
+    setPattern (p);
+}
+
+void AdmiralProcessor::clearPattern (int view)
+{
+    auto p = getPattern();
+    if (view == 1) p.clearFill();
+    else
+    {
+        for (auto& r : p.body) r.fill (0.f);
+        p.clearEnding();
+    }
+    setPattern (p);
 }
 
 void AdmiralProcessor::copyMainToFill()
 {
-    setPattern (1, getPattern (0));
+    // Fill-Zone mit dem übernehmen, was im normalen Durchlauf dort klingt
+    auto p = getPattern();
+    const int len = getLength(), zone = Pattern::fillZone (len);
+    p.clearFill();
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        for (int k = len - zone; k < len; ++k)
+            p.fillEnd[(size_t) t][(size_t) Pattern::layerIndex (k, len, zone)] = p.value (t, k, len, false);
+    setPattern (p);
 }
 
 GenSettings AdmiralProcessor::currentGenSettings() const
@@ -582,47 +624,41 @@ GenSettings AdmiralProcessor::currentGenSettings() const
     return s;
 }
 
-void AdmiralProcessor::applyGen (const GenResult& g)
-{
-    setPattern (0, g.main);
-    setPattern (1, g.fill);
-}
-
 void AdmiralProcessor::generateNew()
 {
     const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() * 2654435761u + (++seedCounter) * 40503u;
-    const auto g = Generator::generate (currentGenSettings(), seed, locked, currentGen());
+    const auto g = Generator::generate (currentGenSettings(), seed, locked, getPattern());
     // Verlauf: alles hinter der aktuellen Position verwerfen, dann anhängen
     if (histPos >= 0 && histPos < (int) history.size() - 1)
         history.erase (history.begin() + histPos + 1, history.end());
     history.push_back (g);
     if (history.size() > 32) history.erase (history.begin());
     histPos = (int) history.size() - 1;
-    applyGen (g);
+    setPattern (g);
 }
 
 void AdmiralProcessor::regenerateFill()
 {
-    auto main = getPattern (0);
+    auto p = getPattern();
+    const auto prev = p;
     const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() + (++seedCounter) * 7919u;
-    auto fill = Generator::makeFill (main, currentGenSettings(), seed);
-    auto prev = getPattern (1);
+    Generator::makeFill (p, currentGenSettings(), seed);
     for (int t = 0; t < NUM_TRACKS; ++t)
-        if (locked[(size_t) t]) fill.v[(size_t) t] = prev.v[(size_t) t];
-    setPattern (1, fill);
+        if (locked[(size_t) t]) p.fillEnd[(size_t) t] = prev.fillEnd[(size_t) t];
+    setPattern (p);
 }
 
 bool AdmiralProcessor::historyBack()
 {
     if (histPos <= 0) return false;
-    applyGen (history[(size_t) --histPos]);
+    setPattern (history[(size_t) --histPos]);
     return true;
 }
 
 bool AdmiralProcessor::historyForward()
 {
     if (histPos < 0 || histPos >= (int) history.size() - 1) return false;
-    applyGen (history[(size_t) ++histPos]);
+    setPattern (history[(size_t) ++histPos]);
     return true;
 }
 
@@ -735,8 +771,9 @@ juce::String AdmiralProcessor::getKitCharacter() const
 bool AdmiralProcessor::writeMidiFile (const juce::File& dest, int bars) const
 {
     constexpr int ppqTicks = 960;
-    const auto mainP = getPattern (0), fillP = getPattern (1);
-    const int fillEvery = fillEveryBars ((int) std::lround (getValue (GP_FILL)));
+    const auto pt = getPattern();
+    const int len = getLength();
+    const int fillEvery = fillEveryCycles ((int) std::lround (getValue (GP_FILL)));
     const float swing = getValue (GP_SWING);
     std::array<bool, NUM_TRACKS> muted {};
     for (int t = 0; t < NUM_TRACKS; ++t) muted[(size_t) t] = getValue (tp (t, TP_MUTE)) > 0.5f;
@@ -748,24 +785,23 @@ bool AdmiralProcessor::writeMidiFile (const juce::File& dest, int bars) const
     auto name = juce::MidiMessage::textMetaEvent (3, "Admiral " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (getValue (GP_GENRE)))]));
     seqOut.addEvent (name, 0.0);
 
-    for (int bar = 0; bar < bars; ++bar)
+    // fortlaufend wie bei der Wiedergabe: "bars" Takte = bars * 16 Sechzehntel, das Pattern läuft in Durchläufen
+    for (long long n = 0; n < (long long) bars * NUM_STEPS; ++n)
     {
-        const bool isFill = isFillBar (bar, fillEvery);
-        const Pattern& p = isFill ? fillP : mainP;
-        for (int k = 0; k < NUM_STEPS; ++k)
+        const long long cycle = n / len;
+        const int k = (int) (n % len);
+        const bool isFill = isFillCycle (cycle, fillEvery);
+        const double tick = stepTimePpq (n, swing) * ppqTicks;
+        for (int t = 0; t < NUM_TRACKS; ++t)
         {
-            const double tick = ((double) bar * 4.0 + stepOffsetPpq (k, swing)) * ppqTicks;
-            for (int t = 0; t < NUM_TRACKS; ++t)
-            {
-                if (muted[(size_t) t]) continue;
-                float v = p.v[(size_t) t][(size_t) k];
-                if (t == T_CRASH && k == 0 && crashAfterFill (bar, fillEvery)) v = juce::jmax (v, 0.9f);
-                if (v <= 0.f) continue;
-                const int note = tracks()[(size_t) t].gmNote;
-                const auto vel = (juce::uint8) juce::jlimit (1, 127, juce::roundToInt (v * 127.f));
-                seqOut.addEvent (juce::MidiMessage::noteOn (10, note, vel), tick);
-                seqOut.addEvent (juce::MidiMessage::noteOff (10, note), tick + ppqTicks / 8.0);
-            }
+            if (muted[(size_t) t]) continue;
+            float v = pt.value (t, k, len, isFill);
+            if (t == T_CRASH && k == 0 && crashAfterFill (cycle, fillEvery)) v = juce::jmax (v, 0.9f);
+            if (v <= 0.f) continue;
+            const int note = tracks()[(size_t) t].gmNote;
+            const auto vel = (juce::uint8) juce::jlimit (1, 127, juce::roundToInt (v * 127.f));
+            seqOut.addEvent (juce::MidiMessage::noteOn (10, note, vel), tick);
+            seqOut.addEvent (juce::MidiMessage::noteOff (10, note), tick + ppqTicks / 8.0);
         }
     }
     seqOut.addEvent (juce::MidiMessage::endOfTrack(), (double) bars * 4.0 * ppqTicks);
@@ -797,13 +833,21 @@ void AdmiralProcessor::getStateInformation (juce::MemoryBlock& dest)
     auto state = apvts.copyState();
 
     juce::ValueTree pt ("PATTERN");
-    for (int w = 0; w < 2; ++w)
     {
-        juce::String s;
+        const auto p = getPattern();
+        juce::String body, ending, fill;
         for (int t = 0; t < NUM_TRACKS; ++t)
-            for (int k = 0; k < NUM_STEPS; ++k)
-                s << juce::String (pat[idx (w, t, k)].load(), 3) << " ";
-        pt.setProperty (w == 0 ? "main" : "fill", s.trim(), nullptr);
+        {
+            for (int k = 0; k < MAX_STEPS; ++k) body << juce::String (p.body[(size_t) t][(size_t) k], 3) << " ";
+            for (int i = 0; i < END_STEPS; ++i)
+            {
+                ending << juce::String (p.ending[(size_t) t][(size_t) i], 3) << " ";
+                fill << juce::String (p.fillEnd[(size_t) t][(size_t) i], 3) << " ";
+            }
+        }
+        pt.setProperty ("body", body.trim(), nullptr);
+        pt.setProperty ("ending", ending.trim(), nullptr);
+        pt.setProperty ("fillend", fill.trim(), nullptr);
     }
     juce::String lk, sl;
     for (bool b : locked) lk << (b ? "1" : "0");
@@ -846,15 +890,28 @@ void AdmiralProcessor::setStateInformation (const void* data, int size)
 
     if (auto pt = tree.getChildWithName ("PATTERN"); pt.isValid())
     {
-        for (int w = 0; w < 2; ++w)
+        auto read = [&] (const char* key, int expected)
         {
             juce::StringArray tok;
-            tok.addTokens (pt.getProperty (w == 0 ? "main" : "fill").toString(), " ", "");
+            tok.addTokens (pt.getProperty (key).toString(), " ", "");
             tok.removeEmptyStrings();
-            if (tok.size() == NUM_TRACKS * NUM_STEPS)
-                for (int i = 0; i < tok.size(); ++i)
-                    pat[(size_t) (w * NUM_TRACKS * NUM_STEPS + i)].store (juce::jlimit (0.f, 1.f, tok[i].getFloatValue()));
+            return tok.size() == expected ? tok : juce::StringArray();
+        };
+        Pattern p;
+        const auto body = read ("body", NUM_TRACKS * MAX_STEPS);
+        const auto ending = read ("ending", NUM_TRACKS * END_STEPS);
+        const auto fill = read ("fillend", NUM_TRACKS * END_STEPS);
+        for (int t = 0; t < NUM_TRACKS; ++t)
+        {
+            if (! body.isEmpty())
+                for (int k = 0; k < MAX_STEPS; ++k) p.body[(size_t) t][(size_t) k] = juce::jlimit (0.f, 1.f, body[t * MAX_STEPS + k].getFloatValue());
+            for (int i = 0; i < END_STEPS; ++i)
+            {
+                if (! ending.isEmpty()) p.ending[(size_t) t][(size_t) i] = juce::jlimit (-1.f, 1.f, ending[t * END_STEPS + i].getFloatValue());
+                if (! fill.isEmpty())   p.fillEnd[(size_t) t][(size_t) i] = juce::jlimit (-1.f, 1.f, fill[t * END_STEPS + i].getFloatValue());
+            }
         }
+        if (! body.isEmpty()) setPattern (p);
         const auto lk = pt.getProperty ("locks").toString();
         const auto sl = pt.getProperty ("soundlocks").toString();
         for (int t = 0; t < NUM_TRACKS; ++t)
@@ -863,9 +920,8 @@ void AdmiralProcessor::setStateInformation (const void* data, int size)
             soundLocked[(size_t) t] = sl.length() > t && sl[t] == '1';
         }
         kitHistory.clear(); kitHistPos = -1; kitCharacter = -1;
-        patternRevision.fetch_add (1);
         history.clear();
-        history.push_back (currentGen());
+        history.push_back (getPattern());
         histPos = 0;
     }
 

@@ -50,12 +50,17 @@ public:
     juce::RangedAudioParameter* getParam (int index) const { return params[(size_t) index]; }
     float getValue (int index) const { return raw[(size_t) index]->load(); }
 
-    // --- Pattern (Message-Thread schreibt, Audio-Thread liest lock-frei). which: 0 = Haupt-Takt, 1 = Fill-Takt ---
-    float getStep (int which, int track, int step) const { return pat[idx (which, track, step)].load(); }
-    void setStep (int which, int track, int step, float v);
-    ad::Pattern getPattern (int which) const;
-    void setPattern (int which, const ad::Pattern& p);
-    void clearPattern (int which);
+    // --- Pattern (Message-Thread schreibt, Audio-Thread liest lock-frei) ---
+    // view: 0 = normaler Durchlauf (Groove + Ending-Variation), 1 = Fill-Durchlauf
+    int getLength() const { return ad::patternLength ((int) std::lround (getValue (ad::GP_LENGTH))); }
+    ad::Pattern getPattern() const;
+    void setPattern (const ad::Pattern& p);
+    float getCell (int view, int track, int step) const { return getPattern().value (track, step, getLength(), view == 1); }
+    // Schritt setzen: in der Variations-Zone der Ansicht wird die Variation bearbeitet, sonst der Groove
+    void setCell (int view, int track, int step, float v);
+    void removeVariation (int view, int track, int step);   // Schritt folgt wieder dem Groove
+    void clearVariation (int view);                          // ganze Variation (Ending bzw. Fill) entfernen
+    void clearPattern (int view);
     void copyMainToFill();
     int getPatternRevision() const { return patternRevision.load(); }    // zählt bei jeder Änderung hoch
 
@@ -85,7 +90,7 @@ public:
     // --- Wiedergabe-Anzeige ---
     int getPlayStep() const { return playStep.load(); }        // -1 = steht
     bool isPlayingFill() const { return playFill.load(); }
-    long long getPlayBar() const { return playBar.load(); }
+    long long getPlayCycle() const { return playCycle.load(); }
     double getCurrentBpm() const { return currentBpm.load(); }
     bool isHostSynced() const { return hostPlaying.load(); }
     float takeMeter (int track) { return engine.takeMeter (track); }
@@ -129,7 +134,9 @@ public:
     static std::shared_ptr<ad::SampleData> decodeSample (const juce::String& base64, const juce::String& name);
 
 private:
-    static size_t idx (int which, int t, int k) { return (size_t) ((which * ad::NUM_TRACKS + t) * ad::NUM_STEPS + k); }
+    static constexpr int kBodySize = ad::NUM_TRACKS * ad::MAX_STEPS, kLayerSize = ad::NUM_TRACKS * ad::END_STEPS;
+    static size_t bIdx (int t, int k)            { return (size_t) (t * ad::MAX_STEPS + k); }
+    static size_t lIdx (int layer, int t, int i) { return (size_t) (kBodySize + layer * kLayerSize + t * ad::END_STEPS + i); }
     static juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
     static BusesProperties makeBuses();
     void timerCallback() override;
@@ -138,8 +145,7 @@ private:
     void applyNormalised (int paramIndex, float normalised);
     void flushMidiParamChanges();
     ad::GenSettings currentGenSettings() const;
-    void applyGen (const ad::GenResult& g);
-    ad::GenResult currentGen() const { return { getPattern (0), getPattern (1) }; }
+
 
     ad::DrumEngine engine;
     static constexpr int kChunk = 256;                    // Blockteilung für die Spur-Effekte
@@ -151,7 +157,7 @@ private:
     std::array<juce::RangedAudioParameter*, ad::NUM_PARAMS> params {};
     std::array<std::atomic<float>*, ad::NUM_PARAMS> raw {};
 
-    std::array<std::atomic<float>, 2 * ad::NUM_TRACKS * ad::NUM_STEPS> pat;
+    std::array<std::atomic<float>, kBodySize + 2 * kLayerSize> pat;
     std::atomic<int> patternRevision { 0 };
     std::array<bool, ad::NUM_TRACKS> locked {}, soundLocked {};
     std::vector<ad::KitSnapshot> kitHistory;
@@ -160,7 +166,7 @@ private:
     std::array<int, ad::NUM_TRACKS> shownSlots {};
     void applyKit (const ad::KitSnapshot& k);
     void pushKit (const ad::KitSnapshot& k);
-    std::vector<ad::GenResult> history;
+    std::vector<ad::Pattern> history;
     int histPos = -1;
     uint32_t seedCounter = 0;
 
@@ -177,7 +183,7 @@ private:
     bool wasRunning = false;
     std::atomic<int> playStep { -1 };
     std::atomic<bool> playFill { false }, hostPlaying { false };
-    std::atomic<long long> playBar { 0 };
+    std::atomic<long long> playCycle { 0 };
     std::atomic<double> currentBpm { 120.0 };
     std::array<std::atomic<bool>, ad::NUM_TRACKS> preview;
     float lastMaster = 0.65f;

@@ -39,12 +39,13 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 | **KIT DESIGNER** | **NEW KIT** würfelt ein neues Kit nach Regeln: das Genre bestimmt einen Charakter (*Dry & Tight, Big 80s Room, Lo-Fi, Industrial, Clean Modern*), daraus werden Kit-Mischung, Stimmung, Decay, Panorama, Filter, Effekte sowie GLUE/TAPE abgeleitet – mit automatischem Pegelausgleich. **MUTATE** variiert das aktuelle Kit nur leicht. `<` / `>` blättern durch die letzten 32 Kits (der Ausgangszustand bleibt erreichbar). Nie verändert: Mute, OUT, Master, Tempo, MIDI und eigene Samples. |
 | DENSITY | wie viele der optionalen Schläge gespielt werden (wenig = minimal, viel = dicht, 16tel-Hats) |
 | VARIATION | zusätzliche Zufallsschläge, Ghost-Notes, Anschlags-Streuung, längere Fills |
-| FILL EVERY | Fill-Takt alle 4 / 8 / 16 Takte, danach automatisch ein Crash |
-| **PATTERN** | 10 Spuren × 16 Schritte. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
+| FILL | Fill in jedem 2. / 4. / 8. Durchlauf des Patterns, danach automatisch ein Crash |
+| **PATTERN** | 10 Spuren × bis zu **48 Schritte**. **LENGTH** 16 / 24 / 32 / 48. Das Raster zeigt 16 Schritte je Seite; die Seitenwahl (1-16, 17-32, 33-48) zeigt eine Mini-Vorschau des ganzen Patterns, **FOLLOW** blättert beim Abspielen mit. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
+| Variations-Zone | Der Generator erzeugt immer 48 Schritte (3 Takte, die sich leicht weiterentwickeln) und setzt hin und wieder eine kleine Variation ins **letzte Viertel** (magenta markiert, kleines Dreieck = weicht vom Groove ab). Kürzen auf 32 / 24 / 16 ist nicht zerstörend: die Variation wandert ans neue Ende, beim Verlängern ist alles wieder da. Rechtsklick in der Zone: Variation an einem Schritt oder ganz entfernen. |
 | LOCK | sperrt Pattern **und** Sound der Spur. Per Rechtsklick getrennt: *Lock pattern* (bleibt bei GENERATE) und *Lock sound* (bleibt bei NEW KIT / MUTATE) – Anzeige dann LOCK P bzw. LOCK S |
 | MUTE / OUT | Spur stumm / auf eigenen Ausgang legen |
 | TUNE · DECAY · PAN · LEVEL | Stimmung (±12 Halbtöne), Ausklang, Panorama, Lautstärke je Spur |
-| MAIN BAR / FILL BAR | welcher Takt im Raster bearbeitet wird (Fill wird magenta dargestellt) |
+| MAIN / FILL | normaler Durchlauf oder Fill-Durchlauf bearbeiten (die Fill-Zone ist die letzte Hälfte, höchstens 12 Schritte) |
 | **TRACK FX** | Effekte der gewählten Spur (Spur im Raster oder in der Spurwahl anklicken): **Filter** (Highpass, Lowpass, Reso) › **Distortion** (Soft/Hard/Fold, Drive, Tone, Mix) › **Delay** (HOST SYNC, Time bzw. Notenwert, Feedback, Mix, Ping-Pong) › **Reverb** (Size, Damp, Mix). Spuren mit aktiven Effekten zeigen ein **FX**-Zeichen. RESET FX setzt die Spur zurück. |
 | **GROOVE** | SWING (verschiebt jede zweite 16tel), HUMANIZE (leichte Zeit- und Anschlags-Streuung), INT. TEMPO / INT. RUN |
 | **MASTER** | Kit (ANALOG = weich/808-artig, PUNCH = hart/909-artig, LINN = 80er-Sample-Drumcomputer mit 8-Bit-Korn), **GLUE** (Bus-Kompressor mit Sidechain-Hochpass, GR-Anzeige), **TAPE** (Band-Sättigung, antialiased), **ALL OUTS** (alle Spuren auf eigene Ausgänge), Master-Lautstärke. GLUE/TAPE wirken auf den Main-Ausgang. |
@@ -62,7 +63,7 @@ Eigene Samples werden im Projekt gespeichert.
 
 ### MIDI
 * **DRAG MIDI TO FL STUDIO** – Fläche anfassen und in die Playlist oder Piano Roll ziehen.
-  Länge (1–16 Takte) im Feld daneben; Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei.
+  Länge (1–16 Takte) im Feld daneben; das Pattern läuft darin fortlaufend in seiner eingestellten Länge, Variationen, Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei.
 * **MIDI OUT** – Noten (General MIDI, Kanal 10: Kick 36, Snare 38, Clap 39, Hats 42/46, Toms 45/50,
   Rim 37, Cowbell 56, Crash 49) gehen zusätzlich an den MIDI-Ausgang, z. B. für FPC oder Battery.
   FL Studio: im Plugin-Fenster *⚙ › MIDI › Output port* setzen und beim Ziel-Instrument denselben *Input port*.
