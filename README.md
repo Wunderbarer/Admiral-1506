@@ -36,11 +36,11 @@ Getestet ausgelegt für **FL Studio** und **Cubase**.
 | Bereich | Funktion |
 |---|---|
 | **GENERATOR** | Genre wählen, **GENERATE** drücken. `<` / `>` blättern durch die letzten 32 erzeugten Pattern. **NEW FILL** erzeugt nur den Fill-Takt neu. |
-| **KIT DESIGNER** | **NEW KIT** würfelt ein neues Kit nach Regeln: das Genre bestimmt einen Charakter (*Dry & Tight, Big 80s Room, Lo-Fi, Industrial, Clean Modern*), daraus werden Kit-Mischung, Stimmung, Decay, Panorama, Filter, Effekte sowie GLUE/TAPE abgeleitet – mit automatischem Pegelausgleich. **MUTATE** variiert das aktuelle Kit nur leicht. `<` / `>` blättern durch die letzten 32 Kits (der Ausgangszustand bleibt erreichbar). Nie verändert: Mute, OUT, Master, Tempo, MIDI und eigene Samples. |
+| **KIT DESIGNER** | **NEW KIT** würfelt ein neues Kit nach Regeln: das Genre bestimmt einen Charakter (*Dry & Tight, Big 80s Room, Lo-Fi, Industrial, Clean Modern*), daraus werden Kit-Mischung, Stimmung, Decay, Panorama, Filter, Effekte sowie GLUE/TAPE abgeleitet – mit automatischem Pegelausgleich. **MUTATE** variiert das aktuelle Kit nur leicht. `<` / `>` blättern durch die letzten 32 Kits (der Ausgangszustand bleibt erreichbar). Nie verändert: Mute, OUT, Master, Tempo, MIDI und eigene Samples. **SAVE KIT / LOAD KIT** speichern bzw. laden ein Kit als `.admiralkit`-Datei – mit allen Spur-Einstellungen (Klangquelle, Level, Pan, Tune, Decay, Filter, Effekte, Mute, OUT), Kit-Wahl, GLUE/TAPE und den eigenen Samples (eingebettet). Standardordner: *Dokumente/CSSynth/Admiral Kits*, danach der zuletzt benutzte. Spuren mit Sound-Sperre bleiben beim Laden unverändert. |
 | DENSITY | wie viele der optionalen Schläge gespielt werden (wenig = minimal, viel = dicht, 16tel-Hats) |
 | VARIATION | zusätzliche Zufallsschläge, Ghost-Notes, Anschlags-Streuung, längere Fills |
-| FILL | Fill in jedem 2. / 4. / 8. Durchlauf des Patterns, danach automatisch ein Crash |
-| **PATTERN** | 10 Spuren × bis zu **48 Schritte**. **LENGTH** 16 / 24 / 32 / 48. Das Raster zeigt immer das ganze Pattern; die Zellen werden bei 32 und 48 Schritten schmaler, Takte sind durch eine Linie getrennt. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
+| FILL | Fill in jedem 2. / 4. / 8. Durchlauf des Patterns, danach automatisch ein Crash. Die Durchläufe zählen ab dem Start der Wiedergabe – Loop-Sprünge der DAW unterbrechen das Pattern nicht. **FILL NOW** spielt den Fill am Ende des laufenden Durchlaufs (leuchtet, bis er kommt). |
+| **PATTERN** | 10 Spuren × bis zu **48 Schritte**. **LENGTH** 16 / 24 / 32 / 48 – beim Abspielen wird der laufende Durchlauf zu Ende gespielt, die neue Länge gilt ab dem nächsten (Anzeige oben rechts). Das Raster zeigt immer das ganze Pattern; die Zellen werden bei 32 und 48 Schritten schmaler, Takte sind durch eine Linie getrennt. Klick: an/aus (Ziehen malt), **Shift-Klick**: Betonung, **Rechtsklick**: Anschlagstärke, **Mausrad**: fein |
 | Variations-Zone | Der Generator erzeugt immer 48 Schritte: 3 Takte, die sich hörbar weiterentwickeln (Takt 2 und 3 unterscheiden sich immer vom ersten – je mehr VARIATION, desto deutlicher) und setzt hin und wieder eine kleine Variation ins **letzte Viertel** (magenta markiert, kleines Dreieck = weicht vom Groove ab). Kürzen auf 32 / 24 / 16 ist nicht zerstörend: die Variation wandert ans neue Ende, beim Verlängern ist alles wieder da. Rechtsklick in der Zone: Variation an einem Schritt oder ganz entfernen. |
 | LOCK | sperrt Pattern **und** Sound der Spur. Per Rechtsklick getrennt: *Lock pattern* (bleibt bei GENERATE) und *Lock sound* (bleibt bei NEW KIT / MUTATE) – Anzeige dann LOCK P bzw. LOCK S |
 | MUTE / OUT | Spur stumm / auf eigenen Ausgang legen |
@@ -58,12 +58,12 @@ in Tonhöhe und Klangfarbe (Round Robin, kein „Maschinengewehr“-Effekt), 4-P
 Eigene Samples werden im Projekt gespeichert. Der Dialog öffnet immer den zuletzt benutzten Sample-Ordner (dauerhaft gemerkt, auch nach einem Neustart und in allen Projekten; gespeichert unter Windows in `%APPDATA%\CSSynth\Admiral1506.settings`, macOS in `~/Library/Application Support/CSSynth/`). Dasselbe gilt getrennt für **SAVE MIDI …**.
 
 ### Wiedergabe
-* **Im Host:** Admiral läuft synchron zum Transport der DAW (Tempo, Position, Loops).
+* **Im Host:** Admiral läuft im Tempo der DAW, die Zählzeiten liegen auf denen der DAW. Beim Start der Wiedergabe beginnt das Pattern von vorn (bzw. an der passenden Stelle im Takt) und läuft dann durch – auch wenn die DAW ein kürzeres Pattern loopt.
 * **Standalone / Host gestoppt:** **INT. RUN** einschalten, Tempo mit **INT. TEMPO**.
 
 ### MIDI
 * **DRAG MIDI TO FL STUDIO** – Fläche anfassen und in die Piano Roll eines Instruments (z. B. FPC, oder Admiral selbst) oder in die Playlist ziehen.
-  Länge (1, 2, 3, 4, 6, 8, 12 oder 16 Takte) im Feld daneben – 3 / 6 / 12 Takte passen genau zu Pattern mit 48 Schritten; das Pattern läuft darin fortlaufend in seiner eingestellten Länge, Variationen, Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei.
+  Länge (1, 2, 3, 4, 6, 8, 12 oder 16 Takte) im Feld daneben – 3 / 6 / 12 Takte passen genau zu Pattern mit 48 Schritten; das Pattern läuft darin fortlaufend in seiner eingestellten Länge, Variationen, Fills, Crash und Swing sind enthalten. **SAVE MIDI …** speichert als Datei. Rechtsklick auf die Fläche: *Show MIDI file in folder* öffnet den Ordner mit der Datei, um sie von dort zu ziehen.
 * **PATTERN PLAY** (MASTER-Bereich) – aus: Admiral spielt sein internes Pattern nicht mehr und ist ein reines Klangmodul,
   das nur auf MIDI-Noten reagiert. So lässt sich ein exportiertes Pattern in der Piano Roll von Admiral weiterbearbeiten,
   ohne dass es doppelt spielt. Sounds, Effekte, Kit Designer und GLUE/TAPE bleiben voll wirksam.

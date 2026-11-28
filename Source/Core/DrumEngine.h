@@ -30,6 +30,9 @@ struct NoteEvent
 };
 
 // Sequencer: wandelt die Host-Position (PPQ) in Schlag-Ereignisse für den aktuellen Block um.
+// Die Position IM Pattern und die Zahl der Durchläufe zählt der Sequencer selbst, ab dem Start der Wiedergabe.
+// Dadurch unterbrechen Loop-Sprünge des Hosts (z. B. ein 4-Takt-Pattern in FL Studio) das Pattern nicht,
+// Fills kommen zuverlässig im eingestellten Durchlauf, und eine neue Länge gilt ab dem nächsten Durchlauf.
 class Sequencer
 {
 public:
@@ -41,16 +44,21 @@ public:
         int numSamples = 0;
         float swing = 0.f, humanize = 0.f;
         int fillEvery = 0;       // Fill in jedem n-ten Durchlauf (0 = aus)
-        int length = MAX_STEPS;  // Pattern-Länge in Sechzehnteln
+        int length = MAX_STEPS;  // gewünschte Pattern-Länge in Sechzehnteln (gilt ab dem nächsten Durchlauf)
     };
 
     // Ereignisse für den Block anhängen
     void collect (const Block& b, const Pattern& pat, std::vector<NoteEvent>& out);
 
+    // Fill auf Knopfdruck: im laufenden Durchlauf, falls die Fill-Zone noch nicht erreicht ist, sonst im nächsten
+    void requestFill() { fillRequested = true; }
+
     int lastStep() const { return lastStep_; }        // zuletzt gespielter Schritt im Pattern, -1 = keiner
     bool lastWasFill() const { return lastFill_; }
     long long lastCycle() const { return lastCycle_; }
-    void reset() { lastStep_ = -1; lastFill_ = false; lastCycle_ = 0; }
+    int playingLength() const { return started ? curLen : -1; }   // Länge des laufenden Durchlaufs
+    bool fillPending() const { return manualFillCycle >= 0 || fillRequested; }
+    void reset() { lastStep_ = -1; lastFill_ = false; lastCycle_ = 0; started = false; manualFillCycle = -1; }
 
 private:
     uint32_t rng = 0x1506u;
@@ -58,6 +66,14 @@ private:
     int lastStep_ = -1;
     bool lastFill_ = false;
     long long lastCycle_ = 0;
+    // eigene Zählung
+    bool started = false;
+    long long lastN = -1;        // zuletzt gespielte Host-Sechzehntel
+    int k = 0;                   // nächster Schritt im Pattern
+    long long cycle = 0;         // Durchlauf seit Start
+    int curLen = MAX_STEPS;      // Länge des laufenden Durchlaufs
+    long long manualFillCycle = -1;
+    bool fillRequested = false;
 };
 
 class DrumEngine

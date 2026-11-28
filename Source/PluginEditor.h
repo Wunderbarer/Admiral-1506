@@ -146,12 +146,17 @@ public:
     void paint (juce::Graphics&) override;
     void mouseEnter (const juce::MouseEvent&) override { hover = true; repaint(); }
     void mouseExit (const juce::MouseEvent&) override { hover = false; repaint(); }
+    void mouseDown (const juce::MouseEvent&) override;
     void mouseDrag (const juce::MouseEvent&) override;
+    void mouseUp (const juce::MouseEvent&) override { dragging = false; dragDone = false; repaint(); }
     std::function<void (const juce::String&)> onNotice;
+    std::function<void()> onSaveRequest;
 
 private:
     AdmiralProcessor& proc;
-    bool hover = false, dragging = false;
+    juce::File prepared;               // beim Anklicken vorbereitete MIDI-Datei
+    int preparedBars = 0;
+    bool hover = false, dragging = false, dragDone = false;
 };
 
 //==============================================================================
@@ -209,6 +214,9 @@ private:
     float shownGr = 0.f;
     juce::TextButton resetFxBtn { "RESET FX" };
     juce::TextButton newKitBtn { "NEW KIT" }, mutateBtn { "MUTATE" }, kitBack { "<" }, kitFwd { ">" };
+    juce::TextButton saveKitBtn { "SAVE KIT" }, loadKitBtn { "LOAD KIT" }, fillNowBtn { "FILL NOW" };
+    void saveKit();
+    void loadKit();
     juce::String kitHistText;
     juce::TooltipWindow tooltips { this, 700 };
 

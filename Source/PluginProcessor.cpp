@@ -230,6 +230,10 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
     }
     else wasRunning = false;
 
+    if (sequencing && ! wasSequencing) seq.reset();       // Wiedergabe startet: Pattern beginnt von vorn, Durchläufe ab hier
+    wasSequencing = sequencing;
+    if (fillTrigger.exchange (false)) seq.requestFill();
+
     if (sequencing)
     {
         const Pattern cur = getPattern();
@@ -248,11 +252,15 @@ void AdmiralProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::Mid
         playStep.store (seq.lastStep());
         playFill.store (seq.lastWasFill());
         playCycle.store (seq.lastCycle());
+        playingLength.store (seq.playingLength());
+        fillPendingFlag.store (seq.fillPending());
         if (! hostPlay) internalPpq += (double) n * bpm / (60.0 * sr);
     }
     else
     {
         playStep.store (-1);
+        playingLength.store (-1);
+        fillPendingFlag.store (false);
         seq.reset();
     }
 
@@ -784,12 +792,14 @@ void AdmiralProcessor::pushKit (const KitSnapshot& k)
 
 void AdmiralProcessor::newKit()
 {
+    loadedKitName.clear();
     const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() * 2246822519u + (++seedCounter) * 3266489917u;
     pushKit (KitDesigner::create ((int) std::lround (getValue (GP_GENRE)), seed, soundLocked, captureKit(), kitLoudness));
 }
 
 void AdmiralProcessor::mutateKit()
 {
+    loadedKitName.clear();
     const uint32_t seed = (uint32_t) juce::Time::getMillisecondCounter() * 374761393u + (++seedCounter) * 668265263u;
     pushKit (KitDesigner::mutate (seed, soundLocked, captureKit(), kitLoudness));
 }
@@ -810,7 +820,94 @@ bool AdmiralProcessor::kitHistoryForward()
 
 juce::String AdmiralProcessor::getKitCharacter() const
 {
-    return juce::isPositiveAndBelow (kitCharacter, (int) characterNames().size()) ? juce::String (characterNames()[(size_t) kitCharacter]) : juce::String();
+    if (juce::isPositiveAndBelow (kitCharacter, (int) characterNames().size())) return juce::String (characterNames()[(size_t) kitCharacter]);
+    return loadedKitName;
+}
+
+//==============================================================================
+juce::File AdmiralProcessor::defaultKitFolder()
+{
+    return juce::File::getSpecialLocation (juce::File::userDocumentsDirectory).getChildFile ("CSSynth").getChildFile ("Admiral Kits");
+}
+
+namespace
+{
+bool isKitParam (int i)
+{
+    return i < NUM_TRACKS * TP_COUNT || i == GP_KIT || i == GP_GLUE || i == GP_TAPE;
+}
+}
+
+bool AdmiralProcessor::saveKitFile (const juce::File& f) const
+{
+    juce::XmlElement root ("ADMIRALKIT");
+    root.setAttribute ("version", 1);
+    root.setAttribute ("name", f.getFileNameWithoutExtension());
+    for (int i = 0; i < NUM_PARAMS; ++i)
+    {
+        if (! isKitParam (i)) continue;
+        auto* e = root.createNewChildElement ("PARAM");
+        e->setAttribute ("id", juce::String (specs()[(size_t) i].id));
+        e->setAttribute ("value", (double) getValue (i));
+    }
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        if (auto& s = userSample[(size_t) t])
+        {
+            auto* e = root.createNewChildElement ("SAMPLE");
+            e->setAttribute ("track", juce::String (tracks()[(size_t) t].id));
+            e->setAttribute ("name", juce::String (s->name));
+            e->setAttribute ("data", encodeSample (*s));
+        }
+    f.getParentDirectory().createDirectory();
+    return root.writeTo (f);
+}
+
+bool AdmiralProcessor::loadKitFile (const juce::File& f, juce::String& message)
+{
+    auto xml = juce::XmlDocument::parse (f);
+    if (xml == nullptr || ! xml->hasTagName ("ADMIRALKIT"))
+    {
+        message = "NOT AN ADMIRAL KIT: " + f.getFileName().toUpperCase();
+        return false;
+    }
+    auto trackOf = [] (int paramIdx) { return paramIdx < NUM_TRACKS * TP_COUNT ? paramIdx / TP_COUNT : -1; };
+
+    // 1. Parameter (Spuren mit Sound-Sperre bleiben, wie sie sind)
+    for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+    {
+        const int i = indexOf (e->getStringAttribute ("id"));
+        if (i < 0 || ! isKitParam (i)) continue;
+        const int t = trackOf (i);
+        if (t >= 0 && soundLocked[(size_t) t]) continue;
+        if (auto* p = params[(size_t) i])
+        {
+            p->beginChangeGesture();
+            p->setValueNotifyingHost (p->convertTo0to1 ((float) e->getDoubleAttribute ("value")));
+            p->endChangeGesture();
+        }
+    }
+    // 2. Samples: Spuren ohne Sample im Kit bekommen wieder den Kit-Klang
+    for (int t = 0; t < NUM_TRACKS; ++t)
+        if (! soundLocked[(size_t) t]) userSample[(size_t) t] = nullptr;
+    int samples = 0;
+    for (auto* e : xml->getChildWithTagNameIterator ("SAMPLE"))
+    {
+        int t = -1;
+        for (int i = 0; i < NUM_TRACKS; ++i)
+            if (e->getStringAttribute ("track") == tracks()[(size_t) i].id) t = i;
+        if (t < 0 || soundLocked[(size_t) t]) continue;
+        if (auto s = decodeSample (e->getStringAttribute ("data"), e->getStringAttribute ("name")))
+        {
+            userSample[(size_t) t] = s;
+            keepAlive.push_back (s);
+            ++samples;
+        }
+    }
+    kitCharacter = -1;
+    loadedKitName = xml->getStringAttribute ("name", f.getFileNameWithoutExtension());
+    updateSlots();
+    message = "KIT LOADED: " + loadedKitName.toUpperCase() + (samples > 0 ? "  (" + juce::String (samples) + " SAMPLES)" : juce::String());
+    return true;
 }
 
 //==============================================================================

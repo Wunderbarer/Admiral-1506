@@ -17,7 +17,7 @@ constexpr float kRrTone[NUM_TRACKS]    = { 0.05f, 0.15f, 0.15f, 0.20f, 0.15f, 0.
 void Sequencer::collect (const Block& b, const Pattern& pat, std::vector<NoteEvent>& out)
 {
     if (b.numSamples <= 0 || b.bpm <= 0.0) return;
-    const int len = std::clamp (b.length, 1, MAX_STEPS);
+    const int wantLen = std::clamp (b.length, 1, MAX_STEPS);
     const double samplesPerPpq = b.sampleRate * 60.0 / b.bpm;
     const double p0 = b.ppqStart;
     const double p1 = p0 + (double) b.numSamples / samplesPerPpq;
@@ -30,9 +30,45 @@ void Sequencer::collect (const Block& b, const Pattern& pat, std::vector<NoteEve
         const double t = stepTimePpq (n, b.swing);
         if (t < p0 || t >= p1) continue;
 
-        const long long cycle = n / len;
-        const int step = (int) (n % len);
-        const bool isFill = isFillCycle (cycle, b.fillEvery);
+        if (! started)
+        {
+            // Start: im ersten Takt an der passenden Stelle einsteigen (Zählzeiten liegen auf den Zählzeiten des Hosts)
+            started = true;
+            curLen = wantLen;
+            k = (int) (n % NUM_STEPS) % curLen;
+            cycle = 0;
+        }
+        else if (n == lastN)
+        {
+            continue;                                   // diese Sechzehntel wurde schon gespielt
+        }
+        else if (n != lastN + 1)
+        {
+            // Sprung des Hosts (Loop, Spulen): weiterzählen, nur die Lage im Takt angleichen
+            const int phase = (int) (n % NUM_STEPS);
+            int nk = k - (k % NUM_STEPS) + phase;
+            if (nk < k - 8) nk += NUM_STEPS;            // nicht rückwärts springen
+            if (nk < k && k - nk <= 2)
+            {
+                // Block lief über das Loop-Ende hinaus: diese Sechzehntel wurde schon gespielt
+                lastN = n;
+                continue;
+            }
+            if (nk >= curLen) { nk = phase % curLen; ++cycle; curLen = wantLen; nk %= curLen; }
+            k = nk;
+        }
+        lastN = n;
+
+        if (fillRequested)
+        {
+            fillRequested = false;
+            const int zoneStart = curLen - Pattern::fillZone (curLen);
+            manualFillCycle = k < zoneStart ? cycle : cycle + 1;
+        }
+
+        const int step = k;
+        const bool isFill = isFillCycle (cycle, b.fillEvery) || manualFillCycle == cycle;
+        const bool crash = step == 0 && (crashAfterFill (cycle, b.fillEvery) || (manualFillCycle >= 0 && manualFillCycle == cycle - 1));
         const int baseOffset = (int) std::floor ((t - p0) * samplesPerPpq);
         lastStep_ = step;
         lastFill_ = isFill;
@@ -40,9 +76,8 @@ void Sequencer::collect (const Block& b, const Pattern& pat, std::vector<NoteEve
 
         for (int tr = 0; tr < NUM_TRACKS; ++tr)
         {
-            float vel = pat.value (tr, step, len, isFill);
-            if (tr == T_CRASH && step == 0 && crashAfterFill (cycle, b.fillEvery))
-                vel = std::max (vel, 0.9f);
+            float vel = pat.value (tr, step, curLen, isFill);
+            if (tr == T_CRASH && crash) vel = std::max (vel, 0.9f);
             if (vel <= 0.f) continue;
 
             int off = baseOffset;
@@ -54,6 +89,15 @@ void Sequencer::collect (const Block& b, const Pattern& pat, std::vector<NoteEve
                 vel = std::clamp (vel + (rand01() - 0.5f) * 0.3f * b.humanize, 0.05f, 1.f);
             }
             out.push_back ({ tr, vel, off });
+        }
+
+        // nächster Schritt; am Ende des Durchlaufs gilt ab jetzt die eingestellte Länge
+        if (++k >= curLen)
+        {
+            k = 0;
+            if (manualFillCycle >= 0 && manualFillCycle < cycle) manualFillCycle = -1;
+            ++cycle;
+            curLen = wantLen;
         }
     }
 }

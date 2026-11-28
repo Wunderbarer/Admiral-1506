@@ -1,4 +1,7 @@
 #include "PluginEditor.h"
+#if JUCE_WINDOWS
+ #include "NativeDrag.h"
+#endif
 
 using namespace ad;
 using juce::Rectangle;
@@ -514,26 +517,63 @@ void MidiDragTile::paint (juce::Graphics& g)
     g.drawText ("DRAG MIDI TO FL STUDIO", (int) x0 + 26, (int) r.getY(), (int) r.getWidth() - 44, (int) r.getHeight(), juce::Justification::centredLeft, false);
 }
 
+void MidiDragTile::mouseDown (const juce::MouseEvent& e)
+{
+    dragging = false;
+    dragDone = false;
+    const int bars = exportBars ((int) std::lround (proc.getValue (GP_BARS)));
+    if (e.mods.isPopupMenu())
+    {
+        juce::PopupMenu m;
+        m.addItem (1, "Save MIDI file ...");
+        m.addItem (2, "Show MIDI file in folder (drag it from there)");
+        juce::Component::SafePointer<MidiDragTile> sp (this);
+        m.showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this), [sp, bars] (int r)
+        {
+            if (sp == nullptr) return;
+            if (r == 1 && sp->onSaveRequest) sp->onSaveRequest();
+            if (r == 2)
+            {
+                const auto f = sp->proc.createMidiExportFile (bars);
+                if (f.existsAsFile()) f.revealToUser();
+            }
+        });
+        return;
+    }
+    // Datei schon beim Anklicken schreiben, damit das Ziehen ohne Verzögerung startet
+    prepared = proc.createMidiExportFile (bars);
+    preparedBars = bars;
+}
+
 void MidiDragTile::mouseDrag (const juce::MouseEvent& e)
 {
-    if (dragging || e.getDistanceFromDragStart() < 6) return;
-    const int bars = exportBars ((int) std::lround (proc.getValue (GP_BARS)));
-    const auto f = proc.createMidiExportFile (bars);
-    if (! f.existsAsFile())
+    if (e.mods.isPopupMenu() || dragging || dragDone || e.getDistanceFromDragStart() < 4) return;
+    if (! prepared.existsAsFile())
     {
         if (onNotice) onNotice ("MIDI EXPORT FAILED");
         return;
     }
     dragging = true;
     repaint();
+    if (onNotice) onNotice ("MIDI: " + juce::String (preparedBars) + (preparedBars == 1 ? " BAR" : " BARS") + "  >  DROP INTO PIANO ROLL OR PLAYLIST");
+#if JUCE_WINDOWS
+    // Windows: im Fenster-Thread ziehen (zuverlässig in FL Studio), siehe NativeDrag.h
+    if (adwin::dragFile (prepared.getFullPathName().toWideCharPointer()))
+    {
+        dragging = false;
+        dragDone = true;               // erst nach dem nächsten Klick wieder ziehen
+        repaint();
+        return;
+    }
+#endif
     juce::Component::SafePointer<MidiDragTile> sp (this);
-    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ f.getFullPathName() }, false, this, [sp]
+    juce::DragAndDropContainer::performExternalDragDropOfFiles ({ prepared.getFullPathName() }, false, this, [sp]
     {
         if (sp == nullptr) return;
         sp->dragging = false;
+        sp->dragDone = true;
         sp->repaint();
     });
-    if (onNotice) onNotice ("MIDI: " + juce::String (bars) + (bars == 1 ? " BAR" : " BARS") + "  >  DROP INTO PLAYLIST OR PIANO ROLL");
 }
 
 //==============================================================================
@@ -640,12 +680,17 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         histFwd.setTooltip ("Next generated pattern");
         addAndMakeVisible (histBack);
         addAndMakeVisible (histFwd);
-        histBack.setBounds (262, kGenY + 34, 40, 30);
-        histFwd.setBounds (306, kGenY + 34, 40, 30);
+        histBack.setBounds (262, kGenY + 34, 40, 26);
+        histFwd.setBounds (306, kGenY + 34, 40, 26);
 
         newFillBtn.onClick = [this] { proc.regenerateFill(); setEditTarget (1); showNotice ("NEW FILL"); };
         addAndMakeVisible (newFillBtn);
-        newFillBtn.setBounds (262, kGenY + 100, 84, 30);
+        newFillBtn.setBounds (262, kGenY + 80, 84, 24);
+        // FILL NOW: Fill am Ende des laufenden (bzw. nächsten) Durchlaufs, unabhängig von der FILL-Einstellung
+        fillNowBtn.onClick = [this] { proc.triggerFill(); showNotice ("FILL AT THE END OF THIS CYCLE"); };
+        fillNowBtn.setTooltip ("Play the fill at the end of the current cycle");
+        addAndMakeVisible (fillNowBtn);
+        fillNowBtn.setBounds (262, kGenY + 108, 84, 24);
 
         knob (GP_DENSITY, "DENSITY", { 360, kGenY + 30, 96, 104 }, 66);
         knob (GP_VARIATION, "VARIATION", { 462, kGenY + 30, 96, 104 }, 66);
@@ -663,8 +708,17 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
         newKitBtn.setTooltip ("New random kit (rule-based, follows the genre). Sound-locked tracks stay.");
         mutateBtn.setTooltip ("Slightly vary the current kit");
         for (auto* b : { &newKitBtn, &mutateBtn, &kitBack, &kitFwd }) addAndMakeVisible (*b);
-        newKitBtn.setBounds (702, kGenY + 50, 138, 30);
-        mutateBtn.setBounds (702, kGenY + 84, 138, 24);
+        newKitBtn.setBounds (702, kGenY + 48, 67, 28);
+        mutateBtn.setBounds (773, kGenY + 48, 67, 28);
+        newKitBtn.getProperties().set ("fontSize", 11.0);
+        saveKitBtn.onClick = [this] { saveKit(); };
+        loadKitBtn.onClick = [this] { loadKit(); };
+        saveKitBtn.setTooltip ("Save the kit: all track settings, effects, GLUE/TAPE and your samples");
+        loadKitBtn.setTooltip ("Load a saved kit (sound-locked tracks stay unchanged)");
+        addAndMakeVisible (saveKitBtn);
+        addAndMakeVisible (loadKitBtn);
+        saveKitBtn.setBounds (702, kGenY + 80, 67, 26);
+        loadKitBtn.setBounds (773, kGenY + 80, 67, 26);
         kitBack.setBounds (702, kGenY + 112, 34, 22);
         kitFwd.setBounds (806, kGenY + 112, 34, 22);
     }
@@ -695,6 +749,7 @@ MainPanel::MainPanel (AdmiralProcessor& p) : proc (p)
 
     dragTile = add<MidiDragTile> (proc);
     dragTile->onNotice = [this] (const juce::String& t) { showNotice (t); };
+    dragTile->onSaveRequest = [this] { saveMidiBtn.triggerClick(); };
 
     for (int i = 0; i < NUM_EXPORT_BARS; ++i)
         barsBox.addItem (juce::String (exportBars (i)) + (i == 0 ? " BAR" : " BARS"), i + 1);
@@ -975,7 +1030,7 @@ void MainPanel::paint (juce::Graphics& g)
     // Generator: Verlauf und Hinweis
     g.setColour (col::iceDim);
     g.setFont (CyberLook::labelFont (10.f));
-    g.drawText ("HISTORY " + histText, 262, kGenY + 68, 84, 26, juce::Justification::centred, false);
+    g.drawText ("HISTORY " + histText, 262, kGenY + 60, 84, 20, juce::Justification::centred, false);
     g.setFont (CyberLook::labelFont (9.5f, false));
     drawGroupLabel (g, 702, kGenY + 28, 138, "KIT DESIGNER");
     g.setColour (col::iceDim);
@@ -1076,6 +1131,46 @@ void MainPanel::filesDropped (const juce::StringArray& files, int x, int y)
     }
 }
 
+void MainPanel::saveKit()
+{
+    const auto start = proc.getLastFolder ("lastKitFolder", juce::File::userDocumentsDirectory);
+    const auto dir = proc.getLastFolder ("lastKitFolder", juce::File::userDocumentsDirectory) == juce::File::getSpecialLocation (juce::File::userDocumentsDirectory)
+                         ? AdmiralProcessor::defaultKitFolder() : start;
+    dir.createDirectory();
+    const juce::String suggestion = proc.getKitCharacter().isNotEmpty() ? proc.getKitCharacter() : juce::String ("My Kit");
+    chooser = std::make_unique<juce::FileChooser> ("Save kit", dir.getChildFile (juce::File::createLegalFileName (suggestion) + ".admiralkit"), "*.admiralkit");
+    juce::Component::SafePointer<MainPanel> sp (this);
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::warnAboutOverwriting,
+                          [sp] (const juce::FileChooser& fc)
+    {
+        if (sp == nullptr) return;
+        auto f = fc.getResult();
+        if (f == juce::File()) return;
+        if (! f.hasFileExtension ("admiralkit")) f = f.withFileExtension ("admiralkit");
+        const bool ok = sp->proc.saveKitFile (f);
+        if (ok) sp->proc.setLastFolder ("lastKitFolder", f.getParentDirectory());
+        sp->showNotice (ok ? "KIT SAVED: " + f.getFileNameWithoutExtension().toUpperCase() : juce::String ("SAVING THE KIT FAILED"));
+    });
+}
+
+void MainPanel::loadKit()
+{
+    auto dir = proc.getLastFolder ("lastKitFolder", juce::File::userDocumentsDirectory);
+    if (dir == juce::File::getSpecialLocation (juce::File::userDocumentsDirectory) && AdmiralProcessor::defaultKitFolder().isDirectory())
+        dir = AdmiralProcessor::defaultKitFolder();
+    chooser = std::make_unique<juce::FileChooser> ("Load kit", dir, "*.admiralkit");
+    juce::Component::SafePointer<MainPanel> sp (this);
+    chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles, [sp] (const juce::FileChooser& fc)
+    {
+        if (sp == nullptr) return;
+        const auto f = fc.getResult();
+        if (! f.existsAsFile()) return;
+        juce::String msg;
+        if (sp->proc.loadKitFile (f, msg)) sp->proc.setLastFolder ("lastKitFolder", f.getParentDirectory());
+        sp->showNotice (msg);
+    });
+}
+
 void MainPanel::startLoadSample (int track)
 {
     // startet im zuletzt benutzten Sample-Ordner (beim ersten Mal: Musik-Ordner)
@@ -1102,7 +1197,9 @@ void MainPanel::updateCaption()
     const juce::String c = which + "  |  " + juce::String (proc.getLength()) + " STEPS  |  " + (fe > 0 ? "FILL EVERY " + juce::String (fe) : juce::String ("FILL OFF"))
                          + "  |  " + juce::String (genreNames()[(size_t) juce::jlimit (0, 6, (int) std::lround (proc.getValue (GP_GENRE)))]).toUpperCase()
                          + (proc.getKitCharacter().isNotEmpty() ? "  |  KIT: " + proc.getKitCharacter().toUpperCase() : juce::String())
-                         + (proc.getValue (GP_PATPLAY) < 0.5f ? "  |  PATTERN PLAY OFF" : "");
+                         + (proc.getValue (GP_PATPLAY) < 0.5f ? "  |  PATTERN PLAY OFF" : "")
+                         + (proc.getPlayingLength() > 0 && proc.getPlayingLength() != proc.getLength()
+                                ? "  |  " + juce::String (proc.getLength()) + " STEPS FROM NEXT CYCLE" : juce::String());
     if (c != caption) { caption = c; repaint (842, 65, 452, 14); }
 }
 
@@ -1126,7 +1223,8 @@ void MainPanel::timerCallback()
     updateCaption();
 
     const juce::String ht = juce::String (proc.getHistoryPos() + 1) + " / " + juce::String (proc.getHistorySize());
-    if (ht != histText) { histText = ht; repaint (262, kGenY + 68, 84, 26); }
+    if (ht != histText) { histText = ht; repaint (262, kGenY + 60, 84, 20); }
+    fillNowBtn.setColour (juce::TextButton::buttonColourId, proc.isFillPending() ? col::magenta.withAlpha (0.45f) : col::panelHi);
     histBack.setEnabled (proc.getHistoryPos() > 0);
     {
         const juce::String kt = proc.getKitHistorySize() == 0 ? juce::String ("- / -")

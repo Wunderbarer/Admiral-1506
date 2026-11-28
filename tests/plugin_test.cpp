@@ -417,6 +417,65 @@ int main (int argc, char** argv)
         std::printf ("        (Einstellungsdatei: %s)\n", AdmiralProcessor::settingsFile().getFullPathName().toRawUTF8());
     }
 
+    // Kit speichern und laden: alle Spur-Parameter, Kit-Wahl, GLUE/TAPE und eigene Samples
+    {
+        auto setP = [&] (AdmiralProcessor& pr, int idx, float plain) { auto* q = pr.getParam (idx); q->setValueNotifyingHost (q->convertTo0to1 (plain)); };
+        p->newKit();
+        setP (*p, ad::tp (ad::T_SNARE, ad::TP_RV_MIX), 0.42f);
+        setP (*p, ad::tp (ad::T_KICK, ad::TP_TUNE), -2.5f);
+        setP (*p, ad::tp (ad::T_CHAT, ad::TP_FLT_HP), 480.f);
+        setP (*p, ad::tp (ad::T_CLAP, ad::TP_OUT), 1.f);
+        setP (*p, ad::GP_TAPE, 0.66f);
+        ad::SampleData sd; sd.sampleRate = 48000.0; sd.data.assign (9600, 0.f);
+        for (size_t i = 0; i < sd.data.size(); ++i) sd.data[i] = 0.8f * std::sin ((float) i * 0.05f) * std::exp (-(float) i / 2000.f);
+        const auto wav = out.getChildFile ("KitTestCow.wav");
+        { juce::MemoryOutputStream d; juce::Base64::convertFromBase64 (d, AdmiralProcessor::encodeSample (sd)); wav.replaceWithData (d.getData(), d.getDataSize()); }
+        juce::String msg;
+        p->loadSampleFile (ad::T_COWBELL, wav, msg);
+        const auto kitFile = out.getChildFile ("Test Kit.admiralkit");
+        const bool saved = p->saveKitFile (kitFile);
+        check (saved && kitFile.existsAsFile(), "Kit gespeichert (" + juce::String (kitFile.getSize() / 1024) + " KB)");
+
+        std::unique_ptr<AdmiralProcessor> q (dynamic_cast<AdmiralProcessor*> (createPluginFilter()));
+        const bool kitLoaded = q->loadKitFile (kitFile, msg);
+        check (kitLoaded, "Kit geladen: " + msg);
+        bool same = true;
+        juce::String firstDiff;
+        for (int i = 0; i < ad::NUM_PARAMS; ++i)
+        {
+            const bool kitParam = i < ad::NUM_TRACKS * ad::TP_COUNT || i == ad::GP_KIT || i == ad::GP_GLUE || i == ad::GP_TAPE;
+            if (kitParam && std::abs (p->getValue (i) - q->getValue (i)) > 1.0e-3f)
+            {
+                if (same) firstDiff = juce::String (ad::specs()[(size_t) i].id);
+                same = false;
+            }
+        }
+        check (same, "alle Kit-Parameter identisch" + (same ? juce::String() : " (abweichend: " + firstDiff + ")"));
+        q->pollParameters();
+        check (q->hasUserSample (ad::T_COWBELL) && q->getSampleName (ad::T_COWBELL) == "KitTestCow" && ! q->hasUserSample (ad::T_KICK),
+               "eigenes Sample im Kit enthalten (" + q->getSampleName (ad::T_COWBELL) + ")");
+        bool srcSame = true;
+        for (int t = 0; t < ad::NUM_TRACKS; ++t) if (q->resolvedKit (t) != p->resolvedKit (t)) srcSame = false;
+        check (srcSame, "Klangquelle je Spur aus dem Kit übernommen");
+
+        // Klingt das geladene Kit gleich? (gleiches Pattern, gleicher Zufall ausgeschaltet)
+        q->setPattern (p->getPattern());
+        setP (*p, ad::GP_HUMANIZE, 0.f); setP (*q, ad::GP_HUMANIZE, 0.f);
+        setP (*q, ad::GP_LENGTH, p->getLength() == 48 ? 3.f : 0.f);
+        auto ra = run (*p, 2), rb = run (*q, 2);
+        check (std::abs (ra.rms - rb.rms) < ra.rms * 0.08, "geladenes Kit klingt gleich (RMS " + juce::String (ra.rms, 3) + " / " + juce::String (rb.rms, 3) + ")");
+
+        // Sound-Sperre: gesperrte Spur bleibt beim Laden unverändert
+        setP (*q, ad::tp (ad::T_KICK, ad::TP_TUNE), 5.f);
+        q->setSoundLocked (ad::T_KICK, true);
+        q->loadKitFile (kitFile, msg);
+        check (std::abs (q->getValue (ad::tp (ad::T_KICK, ad::TP_TUNE)) - 5.f) < 1e-3f, "Sound-Sperre gilt auch beim Laden eines Kits");
+        const bool wrongLoaded = q->loadKitFile (wav, msg);
+        check (! wrongLoaded, "falsche Datei wird abgelehnt: " + msg);
+        p->resetSample (ad::T_COWBELL);
+        setP (*p, ad::tp (ad::T_CLAP, ad::TP_OUT), 0.f);
+    }
+
     // MIDI-Export
     {
         const auto f = out.getChildFile ("export_test.mid");

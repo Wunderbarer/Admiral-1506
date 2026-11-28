@@ -243,6 +243,53 @@ int main (int argc, char** argv)
             }
     }
 
+    // Sequencer im Host-Loop, Längenwechsel und FILL NOW
+    {
+        Pattern p; p.clear();
+        for (int k = 0; k < MAX_STEPS; ++k) p.body[T_CHAT][(size_t) k] = 0.5f;
+        p.body[T_KICK][0] = 1.f;
+        for (int i = 0; i < END_STEPS; ++i) p.fillEnd[T_SNARE][(size_t) i] = 0.9f;
+        const double srr = 48000.0, bpm = 120.0;
+        const int bs = 480;                                    // 1/100 s: Blockgrenzen fallen auf Sechzehntel-Raster
+        auto play = [&] (Sequencer& s, double fromPpq, double toPpq, int len, int every, int& kicks, int& snares, int& hats)
+        {
+            std::vector<NoteEvent> ev;
+            for (double ppq = fromPpq; ppq < toPpq - 1e-9; ppq += bs / (srr * 60.0 / bpm))
+            {
+                Sequencer::Block b; b.ppqStart = ppq; b.bpm = bpm; b.sampleRate = srr; b.numSamples = bs; b.fillEvery = every; b.length = len;
+                ev.clear(); s.collect (b, p, ev);
+                for (auto& e : ev) { if (e.track == T_KICK) ++kicks; if (e.track == T_SNARE) ++snares; if (e.track == T_CHAT) ++hats; }
+            }
+        };
+        // FL-Pattern mit 4 Takten, 6 Mal geloopt: Admiral (48 Schritte, Fill jeden 2. Durchlauf) läuft durch
+        {
+            Sequencer s; int kicks = 0, snares = 0, hats = 0;
+            for (int loop = 0; loop < 6; ++loop) play (s, 0.0, 16.0, 48, 2, kicks, snares, hats);
+            std::printf ("\nHost-Loop 6 x 4 Takte: %d Pattern-Anfänge (erwartet 8), %d Fill-Schläge (erwartet 4 Fills x 12 = 48), %d Hats\n", kicks, snares, hats);
+            if (kicks != 8 || snares != 48) fail ("Pattern/Fill laufen im Host-Loop nicht durch");
+        }
+        // Längenwechsel mitten im Durchlauf: der laufende Durchlauf wird zu Ende gespielt
+        {
+            Sequencer s; int kicks = 0, snares = 0, hats = 0;
+            play (s, 0.0, 4.0, 48, 0, kicks, snares, hats);          // 1 Takt mit 48
+            const int lenBefore = s.playingLength();
+            play (s, 4.0, 12.0, 16, 0, kicks, snares, hats);         // umgestellt auf 16: erst Takt 2+3 (Rest von 48)
+            const int stillOld = s.playingLength();
+            play (s, 12.0, 20.0, 16, 0, kicks, snares, hats);        // danach 16er-Durchläufe
+            std::printf ("Längenwechsel 48 -> 16 nach Takt 1: Länge im Durchlauf %d, nach Takt 3 %d, Pattern-Anfänge %d (erwartet 3)\n", lenBefore, stillOld, kicks);
+            if (lenBefore != 48 || s.playingLength() != 16 || kicks != 3) fail ("Längenwechsel nicht sauber am Durchlauf-Ende");
+        }
+        // FILL NOW: Fill im laufenden Durchlauf, wenn die Fill-Zone noch nicht erreicht ist
+        {
+            Sequencer s; int kicks = 0, snares = 0, hats = 0;
+            play (s, 0.0, 1.0, 16, 0, kicks, snares, hats);
+            s.requestFill();
+            play (s, 1.0, 8.0, 16, 0, kicks, snares, hats);
+            std::printf ("FILL NOW (Länge 16, Fill aus): %d Fill-Schläge (erwartet 8)\n", snares);
+            if (snares != 8) fail ("FILL NOW wirkt nicht");
+        }
+    }
+
     // Klangfarbe nach Anschlag und Round Robin (Snare des Kits ANALOG)
     {
         DrumEngine e;

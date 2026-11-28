@@ -83,7 +83,12 @@ public:
     bool kitHistoryForward();
     int getKitHistoryPos() const { return kitHistPos; }
     int getKitHistorySize() const { return (int) kitHistory.size(); }
-    juce::String getKitCharacter() const;   // Charakter des zuletzt erzeugten Kits ("" = von Hand)
+    juce::String getKitCharacter() const;   // Charakter des zuletzt erzeugten Kits bzw. Name des geladenen Kits ("" = von Hand)
+
+    // --- Kits als Datei (.admiralkit): alle Spur-Parameter, Kit-Wahl, GLUE/TAPE und eigene Samples ---
+    static juce::File defaultKitFolder();   // Dokumente/CSSynth/Admiral Kits
+    bool saveKitFile (const juce::File& f) const;
+    bool loadKitFile (const juce::File& f, juce::String& message);   // Spuren mit Sound-Sperre bleiben unverändert
     ad::KitSnapshot captureKit() const;
     int resolvedKit (int track) const;
 
@@ -91,6 +96,9 @@ public:
     int getPlayStep() const { return playStep.load(); }        // -1 = steht
     bool isPlayingFill() const { return playFill.load(); }
     long long getPlayCycle() const { return playCycle.load(); }
+    int getPlayingLength() const { return playingLength.load(); }     // Länge des laufenden Durchlaufs (-1 = steht)
+    void triggerFill() { fillTrigger.store (true); }                 // FILL NOW
+    bool isFillPending() const { return fillPendingFlag.load(); }
     double getCurrentBpm() const { return currentBpm.load(); }
     bool isHostSynced() const { return hostPlaying.load(); }
     float takeMeter (int track) { return engine.takeMeter (track); }
@@ -167,6 +175,7 @@ private:
     std::array<bool, ad::NUM_TRACKS> locked {}, soundLocked {};
     std::vector<ad::KitSnapshot> kitHistory;
     int kitHistPos = -1, kitCharacter = -1;
+    juce::String loadedKitName;
     ad::KitLoudness kitLoudness {};
     std::array<int, ad::NUM_TRACKS> shownSlots {};
     void applyKit (const ad::KitSnapshot& k);
@@ -191,6 +200,9 @@ private:
     std::atomic<int> playStep { -1 };
     std::atomic<bool> playFill { false }, hostPlaying { false };
     std::atomic<long long> playCycle { 0 };
+    std::atomic<int> playingLength { -1 };
+    std::atomic<bool> fillTrigger { false }, fillPendingFlag { false };
+    bool wasSequencing = false;
     std::atomic<double> currentBpm { 120.0 };
     std::array<std::atomic<bool>, ad::NUM_TRACKS> preview;
     float lastMaster = 0.65f;

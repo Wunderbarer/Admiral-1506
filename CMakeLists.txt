@@ -76,6 +76,12 @@ target_sources(Admiral1506 PRIVATE
 
 target_include_directories(Admiral1506 PRIVATE Source)
 
+# Windows: MIDI-Datei im Fenster-Thread ziehen (zuverlässiges Drag & Drop in FL Studio)
+if(WIN32)
+    target_sources(Admiral1506 PRIVATE Source/NativeDrag.cpp)
+    target_link_libraries(Admiral1506 PRIVATE ole32 shell32 uuid)
+endif()
+
 target_compile_definitions(Admiral1506 PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
